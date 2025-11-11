@@ -1,0 +1,29 @@
+/* 오른쪽 스크롤바 옆에 붙는 얇은 오버레이 */
+#question-scrollbar-container {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 10px;              /* 진짜 스크롤바 느낌으로 얇게 */
+    height: 100%;
+    z-index: 9999;
+    pointer-events: none;     /* 기본적으로는 뒤에 클릭 통과 */
+}
+
+/* 개별 질문 마커(= 파란 바) */
+.question-marker {
+    position: absolute;
+    left: 0;
+    right: 0;
+    margin: 0 auto;          /* 가운데 정렬 */
+    width: 100%;             /* 컨테이너 폭 전체 */
+    height: 4px;             /* 얇은 바 느낌 */
+    background-color: rgba(0, 162, 255, 0.8);
+    border-radius: 2px;
+    pointer-events: all;     /* 마커만 클릭 가능 */
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.question-marker:hover {
+    background-color: rgba(0, 102, 255, 1);
+}
