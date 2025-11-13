@@ -1,12 +1,29 @@
 <!DOCTYPE html>
-<html>
+<html lang="ko">
 <head>
-    <title>Where is the question</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>질문 목록</title>
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-    <h1>Where is the question</h1>
-    <p>This extension helps you find your questions in ChatGPT.</p>
+    <div class="container">
+        <div class="header">
+            <h1>내 질문 목록</h1>
+        </div>
+        <ul id="question-list" class="question-list">
+            <!-- 
+            <li class="question-item" data-question-id="...">
+                <span class="question-text">질문 내용...</span>
+                <span class="favorite-star">☆</span>
+            </li>
+            -->
+        </ul>
+        <div id="empty-message" class="empty-message" style="display: none;">
+            <p>표시할 질문이 없습니다.</p>
+            <p>ChatGPT 페이지에서 질문을 하면 여기에 표시됩니다.</p>
+        </div>
+    </div>
     <script src="popup.js"></script>
 </body>
 </html>

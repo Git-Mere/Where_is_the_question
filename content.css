@@ -3,7 +3,7 @@
     position: fixed;
     top: 0;
     right: 0;
-    width: 10px;              /* 진짜 스크롤바 느낌으로 얇게 */
+    width: 14px;              /* 컨테이너 폭 증가 */
     height: 100%;
     z-index: 9999;
     pointer-events: none;     /* 기본적으로는 뒤에 클릭 통과 */
@@ -16,7 +16,7 @@
     right: 0;
     margin: 0 auto;          /* 가운데 정렬 */
     width: 100%;             /* 컨테이너 폭 전체 */
-    height: 4px;             /* 얇은 바 느낌 */
+    height: 5px;             /* 마커 두께 증가 */
     background-color: rgba(0, 162, 255, 0.8);
     border-radius: 2px;
     pointer-events: all;     /* 마커만 클릭 가능 */
@@ -26,4 +26,39 @@
 
 .question-marker:hover {
     background-color: rgba(0, 102, 255, 1);
+}
+
+/* 즐겨찾기된 질문 마커 */
+.question-marker.favorite {
+    background-color: rgba(255, 238, 0, 0.9);
+}
+
+.question-marker.favorite:hover {
+    background-color: rgba(255, 225, 0, 1);
+}
+
+/* 마커 호버 시 나타나는 툴팁 */
+.question-marker-tooltip {
+    position: absolute;
+    top: 50%;
+    right: 20px; /* 마커 오른쪽에 표시 */
+    transform: translateY(-50%);
+    width: 200px; /* 너비 200px로 증가 */
+    padding: 8px;
+    background-color: #2c2c2c;
+    color: #f1f1f1;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+    z-index: 10000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s, visibility 0.2s;
+    max-height: 100px; /* 최대 높이 100px */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 4; /* 4줄까지 보이도록 */
+    -webkit-box-orient: vertical;
 }

@@ -3,175 +3,232 @@
 // 디바운스용 타이머
 let debounceTimeout = null;
 
+// --- Storage & Event Listeners ---
+
+// Storage에서 즐겨찾기 목록 가져오기
+const getFavorites = () => {
+    return new Promise(resolve => {
+        chrome.storage.local.get({ favorites: [] }, (result) => {
+            resolve(result.favorites);
+        });
+    });
+};
+
+// 즐겨찾기 목록이 변경되면 마커를 다시 렌더링
+chrome.storage.onChanged.addListener((changes, namespace) => {
+    if (namespace === 'local' && changes.favorites) {
+        console.log('[Where is the question] Favorites changed, re-rendering markers.');
+        createQuestionMarkers();
+    }
+});
+
+
 // 🔹 실제로 스크롤되는 컨테이너 찾기
-// - ChatGPT는 윈도우가 아니라 안쪽 div가 스크롤되는 구조일 수 있어서
 function getScrollContainer() {
     const firstQuestion = document.querySelector('div[data-message-author-role="user"]');
     if (!firstQuestion) {
-        console.log('[Where is the question] No question found. Use window as scroll container.');
         return window;
     }
-
     let el = firstQuestion.parentElement;
-
     while (el && el !== document.body) {
         const style = window.getComputedStyle(el);
-        const overflowY = style.overflowY;
-
-        // overflow-y가 auto나 scroll이고, 실제로 스크롤 가능한 높이가 있으면 스크롤 컨테이너로 판단
-        if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 10) {
-            console.log('[Where is the question] Using this element as scroll container:', el);
+        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 10) {
             return el;
         }
-
         el = el.parentElement;
     }
-
-    // 못 찾으면 마지막 수단으로 window 사용
-    console.log('[Where is the question] Scroll container not found. Fallback to window.');
     return window;
 }
 
-// 🔹 질문이 스크롤 컨테이너 안에서 얼마만큼 아래에 있는지(px) 구하기
+// 🔹 질문의 컨테이너 내 위치(px) 구하기
 function getQuestionPositionInContainer(question, container) {
     if (container === window) {
         const rect = question.getBoundingClientRect();
         return rect.top + window.scrollY;
     }
-
-    // container 안에서의 상대 위치를 구함
     let offset = 0;
     let el = question;
-
     while (el && el !== container) {
         offset += el.offsetTop;
         el = el.offsetParent;
     }
-
     return offset;
 }
 
-// 🔹 마커 생성 메인 함수
-function createQuestionMarkers() {
+// 🔹 마커 생성 메인 함수 (비동기로 변경)
+async function createQuestionMarkers() {
     console.log('[Where is the question] Running createQuestionMarkers...');
 
     const questionSelector = 'div[data-message-author-role="user"]';
     const questions = document.querySelectorAll(questionSelector);
-    console.log(`[Where is the question] Found ${questions.length} user question elements.`);
+    const questionsForPopup = [];
+    
+    // 즐겨찾기 목록을 먼저 불러옴
+    const favorites = await getFavorites();
 
-    // 질문 하나도 없으면 그냥 종료
     if (questions.length === 0) {
         const existContainer = document.getElementById('question-scrollbar-container');
         if (existContainer) {
             existContainer.style.display = 'none';
             existContainer.innerHTML = '';
         }
-        console.log('[Where is the question] No questions. Nothing to draw.');
+        if (chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({ type: 'questionList', questions: [] });
+        }
         return;
     }
 
-    // 스크롤 컨테이너 찾기
     const scrollContainer = getScrollContainer();
-
     let scrollbarContainer = document.getElementById('question-scrollbar-container');
 
-    // 처음 한 번만 컨테이너 만들기
     if (!scrollbarContainer) {
         scrollbarContainer = document.createElement('div');
         scrollbarContainer.id = 'question-scrollbar-container';
         document.body.appendChild(scrollbarContainer);
-        console.log('[Where is the question] Created scrollbar container.');
     }
 
-    // 스크롤 가능한 전체 높이 계산
-    let scrollableHeight = 0;
-
-    if (scrollContainer === window) {
-        const totalHeight = document.documentElement.scrollHeight;
-        const viewportHeight = window.innerHeight;
-        scrollableHeight = Math.max(totalHeight - viewportHeight, 1);
-        console.log('[Where is the question] Using window scroll. totalHeight, viewportHeight, scrollableHeight =',
-            totalHeight, viewportHeight, scrollableHeight);
-    } else {
-        scrollableHeight = Math.max(scrollContainer.scrollHeight - scrollContainer.clientHeight, 1);
-        console.log('[Where is the question] Using inner scroll container. scrollHeight, clientHeight, scrollableHeight =',
-            scrollContainer.scrollHeight, scrollContainer.clientHeight, scrollableHeight);
-    }
+    const scrollableHeight = (scrollContainer === window)
+        ? Math.max(document.documentElement.scrollHeight - window.innerHeight, 1)
+        : Math.max(scrollContainer.scrollHeight - scrollContainer.clientHeight, 1);
 
     if (scrollableHeight <= 0) {
-        console.log('[Where is the question] scrollableHeight <= 0. Hiding container.');
         scrollbarContainer.style.display = 'none';
         scrollbarContainer.innerHTML = '';
+        if (chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({ type: 'questionList', questions: [] });
+        }
         return;
     } else {
         scrollbarContainer.style.display = 'block';
     }
 
-    // 기존 마커 전부 제거
     scrollbarContainer.innerHTML = '';
 
-    // 각 질문마다 마커 생성
     questions.forEach((question, index) => {
         const marker = document.createElement('div');
         marker.className = 'question-marker';
 
-        // 툴팁 텍스트 (hover시)
-        const questionTextElement = question.querySelector('.text-base');
-        const questionText = questionTextElement ? questionTextElement.innerText : `Question ${index + 1}`;
-        marker.title = questionText;
-
-        // 이 질문이 스크롤 컨테이너 안에서 얼마나 아래 있는지(px)
-        const questionPosition = getQuestionPositionInContainer(question, scrollContainer);
-
-        // 0 ~ scrollableHeight 사이로 클램프
-        const clamped = Math.min(Math.max(questionPosition, 0), scrollableHeight);
-        const markerPositionPercent = (clamped / scrollableHeight) * 100;
-
-        marker.style.top = `${markerPositionPercent}%`;
-
-        // 마커 클릭 시 해당 위치로 스크롤
-        marker.addEventListener('click', () => {
-            console.log('[Where is the question] Scrolling to question at position', questionPosition);
-
-            if (scrollContainer === window) {
-                window.scrollTo({
-                    top: questionPosition,
-                    behavior: 'smooth'
-                });
-            } else if (typeof scrollContainer.scrollTo === 'function') {
-                scrollContainer.scrollTo({
-                    top: questionPosition,
-                    behavior: 'smooth'
-                });
-            } else {
-                scrollContainer.scrollTop = questionPosition;
+        let questionText = `Question ${index + 1}`;
+        const conversationTurn = question.closest('div[data-testid^="conversation-turn"]');
+        if (conversationTurn) {
+            const textContentElement = conversationTurn.querySelector('.markdown.prose, .text-base, .whitespace-pre-wrap');
+            if (textContentElement && textContentElement.innerText.trim().length > 0) {
+                questionText = textContentElement.innerText.trim();
+            } else if (conversationTurn.innerText.trim().length > 0) {
+                questionText = conversationTurn.innerText.trim();
             }
+        } else if (question.innerText.trim().length > 0) {
+            questionText = question.innerText.trim();
+        }
+
+        const questionPosition = getQuestionPositionInContainer(question, scrollContainer);
+        // 즐겨찾기 ID로 사용할 고유 ID 생성 (내용 일부 + 위치)
+        const questionId = `${questionText.substring(0, 20)}-${Math.round(questionPosition)}`;
+
+        // 즐겨찾기 여부 확인 및 스타일 적용
+        if (favorites.some(fav => fav.id === questionId)) {
+            marker.classList.add('favorite');
+        }
+
+        const tooltip = document.createElement('div');
+        tooltip.className = 'question-marker-tooltip';
+        tooltip.textContent = questionText;
+        marker.appendChild(tooltip);
+
+        marker.addEventListener('mouseenter', () => {
+            tooltip.style.opacity = '1';
+            tooltip.style.visibility = 'visible';
+        });
+        marker.addEventListener('mouseleave', (e) => {
+            if (!tooltip.contains(e.relatedTarget)) {
+                tooltip.style.opacity = '0';
+                tooltip.style.visibility = 'hidden';
+            }
+        });
+        tooltip.addEventListener('mouseleave', (e) => {
+            if (e.relatedTarget !== marker) {
+                tooltip.style.opacity = '0';
+                tooltip.style.visibility = 'hidden';
+            }
+        });
+
+        questionsForPopup.push({
+            id: questionId,
+            text: questionText,
+            position: questionPosition
+        });
+
+        const clamped = Math.min(Math.max(questionPosition, 0), scrollableHeight);
+        marker.style.top = `${(clamped / scrollableHeight) * 100}%`;
+
+        marker.addEventListener('click', () => {
+            const targetScrollContainer = getScrollContainer();
+            if (typeof targetScrollContainer.scrollTo === 'function') {
+                targetScrollContainer.scrollTo({ top: questionPosition, behavior: 'smooth' });
+            } else {
+                targetScrollContainer.scrollTop = questionPosition;
+            }
+        });
+
+        // 마커 우클릭 시 즐겨찾기 토글
+        marker.addEventListener('contextmenu', async (e) => {
+            e.preventDefault(); // 기본 우클릭 메뉴 방지
+            const currentFavorites = await getFavorites();
+            const isFavorite = currentFavorites.some(fav => fav.id === questionId);
+            let updatedFavorites;
+
+            if (isFavorite) {
+                // 즐겨찾기에서 제거
+                updatedFavorites = currentFavorites.filter(fav => fav.id !== questionId);
+            } else {
+                // 즐겨찾기에 추가
+                updatedFavorites = [...currentFavorites, { id: questionId, text: questionText, position: questionPosition }];
+            }
+
+            // 변경된 목록을 저장 (이것으로 onChanged 리스너가 트리거됨)
+            chrome.storage.local.set({ favorites: updatedFavorites });
         });
 
         scrollbarContainer.appendChild(marker);
     });
 
-    console.log('[Where is the question] Markers created:', scrollbarContainer.childElementCount);
+    if (chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({ type: 'questionList', questions: questionsForPopup });
+    }
 }
 
-// 🔹 창 크기 바뀔 때도 다시 계산
+// --- Initial Execution & Observers ---
+
+// 팝업으로부터의 요청 처리
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'scrollToQuestion') {
+        const scrollContainer = getScrollContainer();
+        if (typeof scrollContainer.scrollTo === 'function') {
+            scrollContainer.scrollTo({ top: message.position, behavior: 'smooth' });
+        } else {
+            scrollContainer.scrollTop = message.position;
+        }
+        sendResponse({ status: 'scrolling' });
+    } else if (message.type === 'getQuestions') {
+        // 팝업이 열릴 때 질문을 다시 스캔해서 보내줌
+        createQuestionMarkers();
+        sendResponse({ status: 'processing' });
+    }
+    return true;
+});
+
 window.addEventListener('resize', () => {
     clearTimeout(debounceTimeout);
     debounceTimeout = setTimeout(createQuestionMarkers, 300);
 });
 
-// 🔹 DOM 변화를 감지해서, 일정 시간 후에 다시 마커 갱신
 const observer = new MutationObserver(() => {
     clearTimeout(debounceTimeout);
-    debounceTimeout = setTimeout(() => {
-        createQuestionMarkers();
-    }, 500); // 500ms 대기 후 레이아웃 안정되면 실행
+    debounceTimeout = setTimeout(createQuestionMarkers, 500);
 });
 
-// 🔹 초기 1번 실행 (페이지가 어느 정도 로드된 뒤)
 setTimeout(createQuestionMarkers, 1000);
 
-// 🔹 body 전체를 감시 (채팅 추가/변경 감지용)
 observer.observe(document.body, {
     childList: true,
     subtree: true
