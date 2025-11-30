@@ -2,6 +2,30 @@
 
 // 디바운스용 타이머
 let debounceTimeout = null;
+let lastQuestionsSignature = '';
+
+
+// popup이 열려 있지 않을 때도 콘솔 에러가 안 뜨도록 questionList 메시지를 안전하게 보내는 함수
+function safeSendQuestionList(questionsForPopup) {
+    if (!chrome.runtime || !chrome.runtime.sendMessage) return;
+
+    try {
+        chrome.runtime.sendMessage(
+            { type: 'questionList', questions: questionsForPopup },
+            () => {
+                // popup이 안 열려 있으면 lastError가 생기는데, 콘솔에 안 찍히게 무시
+                if (chrome.runtime.lastError) {
+                    // 필요하면 디버깅용 로그:
+                    // console.debug('[Where is the question] popup not open:', chrome.runtime.lastError.message);
+                }
+            }
+        );
+    } catch (e) {
+        // 확장 프로그램이 리로드 되는 중 등 예외 상황도 조용히 무시
+        // console.debug('[Where is the question] sendMessage failed:', e);
+    }
+}
+
 
 // --- Storage & Event Listeners ---
 
@@ -18,7 +42,7 @@ const getFavorites = () => {
 chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'local' && changes.favorites) {
         console.log('[Where is the question] Favorites changed, re-rendering markers.');
-        createQuestionMarkers();
+        createQuestionMarkers(true);
     }
 });
 
@@ -55,8 +79,35 @@ function getQuestionPositionInContainer(question, container) {
     return offset;
 }
 
+// 🔹 상단 고정 헤더 + 여유 마진만큼 보정값 구하기
+function getScrollOffset(scrollContainer) {
+    if (scrollContainer === window) {
+        const header =
+            document.querySelector('header') ||
+            document.querySelector('nav') ||
+            document.querySelector('[data-testid="sidebar-nav"]');
+        const headerHeight = header ? header.getBoundingClientRect().height : 0;
+        return headerHeight + 12;
+    }
+    return 12;
+}
+
+function scrollToQuestionPosition(rawPosition) {
+    const scrollContainer = getScrollContainer();
+    const offset = getScrollOffset(scrollContainer);
+    const target = Math.max(rawPosition - offset, 0);
+
+    if (typeof scrollContainer.scrollTo === 'function') {
+        scrollContainer.scrollTo({ top: target, behavior: 'smooth' });
+    } else {
+        scrollContainer.scrollTop = target;
+    }
+}
+
+
+
 // 🔹 마커 생성 메인 함수 (비동기로 변경)
-async function createQuestionMarkers() {
+async function createQuestionMarkers(force = false) {
     console.log('[Where is the question] Running createQuestionMarkers...');
 
     const questionSelector = 'div[data-message-author-role="user"]';
@@ -66,17 +117,32 @@ async function createQuestionMarkers() {
     // 즐겨찾기 목록을 먼저 불러옴
     const favorites = await getFavorites();
 
+    // 질문이 하나도 없을 때
     if (questions.length === 0) {
         const existContainer = document.getElementById('question-scrollbar-container');
         if (existContainer) {
             existContainer.style.display = 'none';
             existContainer.innerHTML = '';
         }
-        if (chrome.runtime && chrome.runtime.sendMessage) {
-            chrome.runtime.sendMessage({ type: 'questionList', questions: [] });
-        }
+        lastQuestionsSignature = '';   // 시그니처 리셋
+        safeSendQuestionList([]);
         return;
     }
+
+    // 🔹 현재 질문들의 “내용 시그니처” 만들기 (텍스트 기준)
+    const signature = Array.from(questions)
+        .map(q => q.innerText.trim())
+        .join('||');
+
+    // 🔹 이전과 완전히 같고, 강제 업데이트가 아니라면 스킵
+    if (!force && signature === lastQuestionsSignature) {
+        console.log('[Where is the question] Questions unchanged, skip marker redraw.');
+        return;
+    }
+
+    // 이 시점에서만 시그니처 갱신
+    lastQuestionsSignature = signature;
+
 
     const scrollContainer = getScrollContainer();
     let scrollbarContainer = document.getElementById('question-scrollbar-container');
@@ -94,9 +160,7 @@ async function createQuestionMarkers() {
     if (scrollableHeight <= 0) {
         scrollbarContainer.style.display = 'none';
         scrollbarContainer.innerHTML = '';
-        if (chrome.runtime && chrome.runtime.sendMessage) {
-            chrome.runtime.sendMessage({ type: 'questionList', questions: [] });
-        }
+        safeSendQuestionList([]);
         return;
     } else {
         scrollbarContainer.style.display = 'block';
@@ -135,22 +199,25 @@ async function createQuestionMarkers() {
         tooltip.textContent = questionText;
         marker.appendChild(tooltip);
 
-        marker.addEventListener('mouseenter', () => {
+        let hideTooltipTimer = null;
+
+        const showTooltip = () => {
+            clearTimeout(hideTooltipTimer);
             tooltip.style.opacity = '1';
             tooltip.style.visibility = 'visible';
-        });
-        marker.addEventListener('mouseleave', (e) => {
-            if (!tooltip.contains(e.relatedTarget)) {
+        };
+
+        const hideTooltip = () => {
+            hideTooltipTimer = setTimeout(() => {
                 tooltip.style.opacity = '0';
                 tooltip.style.visibility = 'hidden';
-            }
-        });
-        tooltip.addEventListener('mouseleave', (e) => {
-            if (e.relatedTarget !== marker) {
-                tooltip.style.opacity = '0';
-                tooltip.style.visibility = 'hidden';
-            }
-        });
+            }, 200); // 200ms delay before hiding
+        };
+
+        marker.addEventListener('mouseenter', showTooltip);
+        marker.addEventListener('mouseleave', hideTooltip);
+        tooltip.addEventListener('mouseenter', showTooltip);
+        tooltip.addEventListener('mouseleave', hideTooltip);
 
         questionsForPopup.push({
             id: questionId,
@@ -162,13 +229,9 @@ async function createQuestionMarkers() {
         marker.style.top = `${(clamped / scrollableHeight) * 100}%`;
 
         marker.addEventListener('click', () => {
-            const targetScrollContainer = getScrollContainer();
-            if (typeof targetScrollContainer.scrollTo === 'function') {
-                targetScrollContainer.scrollTo({ top: questionPosition, behavior: 'smooth' });
-            } else {
-                targetScrollContainer.scrollTop = questionPosition;
-            }
+            scrollToQuestionPosition(questionPosition);
         });
+
 
         // 마커 우클릭 시 즐겨찾기 토글
         marker.addEventListener('contextmenu', async (e) => {
@@ -192,44 +255,69 @@ async function createQuestionMarkers() {
         scrollbarContainer.appendChild(marker);
     });
 
-    if (chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ type: 'questionList', questions: questionsForPopup });
-    }
+    safeSendQuestionList(questionsForPopup);
 }
 
 // --- Initial Execution & Observers ---
 
-// 팝업으로부터의 요청 처리
+// 팝업으로부터의 요청 처리 (한 번만 등록)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'scrollToQuestion') {
-        const scrollContainer = getScrollContainer();
-        if (typeof scrollContainer.scrollTo === 'function') {
-            scrollContainer.scrollTo({ top: message.position, behavior: 'smooth' });
-        } else {
-            scrollContainer.scrollTop = message.position;
-        }
+        // 항상 헤더 높이 고려해서 스크롤
+        scrollToQuestionPosition(message.position);
         sendResponse({ status: 'scrolling' });
     } else if (message.type === 'getQuestions') {
-        // 팝업이 열릴 때 질문을 다시 스캔해서 보내줌
-        createQuestionMarkers();
+        createQuestionMarkers(true);
         sendResponse({ status: 'processing' });
     }
+    // 비동기 응답 가능하게 유지 (지금은 바로 응답하지만 패턴상 true 유지)
     return true;
 });
 
+// 창 크기 변경 시에도 마커 위치 갱신 (중복 없이 딱 한 번만)
 window.addEventListener('resize', () => {
     clearTimeout(debounceTimeout);
     debounceTimeout = setTimeout(createQuestionMarkers, 300);
 });
 
-const observer = new MutationObserver(() => {
+// DOM 변경 시 1.5초 뒤에 한 번만 갱신
+const observer = new MutationObserver((mutationsList) => {
+    const scrollbarContainer = document.getElementById('question-scrollbar-container');
+    let shouldUpdate = false;
+
+    for (const mutation of mutationsList) {
+        // 🔹 우리 익스텐션이 만든 스크롤바 안에서 일어나는 변화는 무시
+        if (scrollbarContainer && scrollbarContainer.contains(mutation.target)) {
+            continue;
+        }
+
+        // 🔹 진짜 DOM 구조 / 텍스트가 바뀐 경우만 반응
+        if (mutation.type === 'childList' && (mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0)) {
+            shouldUpdate = true;
+            break;
+        }
+        if (mutation.type === 'characterData') {
+            shouldUpdate = true;
+            break;
+        }
+    }
+
+    if (!shouldUpdate) return;
+
     clearTimeout(debounceTimeout);
-    debounceTimeout = setTimeout(createQuestionMarkers, 500);
+    debounceTimeout = setTimeout(() => {
+        console.log('[Where is the question] DOM changed, updating markers...');
+        createQuestionMarkers();
+    }, 1500);
 });
 
+// 처음 진입했을 때 한 번 실행
 setTimeout(createQuestionMarkers, 1000);
 
+// 전체 문서에 대해 변경 감지
 observer.observe(document.body, {
     childList: true,
-    subtree: true
+    subtree: true,
+    characterData: true   // 텍스트 내용만 바뀌는 것도 잡기
 });
+
