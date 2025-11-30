@@ -7,7 +7,7 @@ let lastQuestionsSignature = '';
 
 // popup이 열려 있지 않을 때도 콘솔 에러가 안 뜨도록 questionList 메시지를 안전하게 보내는 함수
 function safeSendQuestionList(questionsForPopup) {
-    if (!chrome.runtime || !chrome.runtime.sendMessage) return;
+     if (!chrome.runtime || !chrome.runtime.id || !chrome.runtime.sendMessage) return;
 
     try {
         chrome.runtime.sendMessage(
@@ -92,8 +92,8 @@ function getScrollOffset(scrollContainer) {
     return 12;
 }
 
-function scrollToQuestionPosition(rawPosition) {
-    const scrollContainer = getScrollContainer();
+function scrollToQuestionPosition(rawPosition, scrollContainerOverride = null) {
+    const scrollContainer = scrollContainerOverride || getScrollContainer();
     const offset = getScrollOffset(scrollContainer);
     const target = Math.max(rawPosition - offset, 0);
 
@@ -103,6 +103,7 @@ function scrollToQuestionPosition(rawPosition) {
         scrollContainer.scrollTop = target;
     }
 }
+
 
 
 
@@ -129,10 +130,19 @@ async function createQuestionMarkers(force = false) {
         return;
     }
 
-    // 🔹 현재 질문들의 “내용 시그니처” 만들기 (텍스트 기준)
-    const signature = Array.from(questions)
+    // 🔹 현재 질문들의 텍스트 시그니처
+    const textSignature = Array.from(questions)
         .map(q => q.innerText.trim())
         .join('||');
+
+    // 🔹 스크롤 컨테이너 & 전체 높이 (레이아웃 변화 감지용)
+    const scrollContainer = getScrollContainer();
+    const heightSignature = (scrollContainer === window)
+        ? document.documentElement.scrollHeight
+        : scrollContainer.scrollHeight;
+
+    // 텍스트 + 높이를 합쳐서 최종 시그니처
+    const signature = `${textSignature}::${heightSignature}`;
 
     // 🔹 이전과 완전히 같고, 강제 업데이트가 아니라면 스킵
     if (!force && signature === lastQuestionsSignature) {
@@ -140,11 +150,9 @@ async function createQuestionMarkers(force = false) {
         return;
     }
 
-    // 이 시점에서만 시그니처 갱신
     lastQuestionsSignature = signature;
 
 
-    const scrollContainer = getScrollContainer();
     let scrollbarContainer = document.getElementById('question-scrollbar-container');
 
     if (!scrollbarContainer) {
@@ -229,7 +237,10 @@ async function createQuestionMarkers(force = false) {
         marker.style.top = `${(clamped / scrollableHeight) * 100}%`;
 
         marker.addEventListener('click', () => {
-            scrollToQuestionPosition(questionPosition);
+            // 클릭 시점 기준으로 다시 위치 계산
+            const currentContainer = getScrollContainer();
+            const currentPos = getQuestionPositionInContainer(question, currentContainer);
+            scrollToQuestionPosition(currentPos, currentContainer);
         });
 
 
@@ -281,34 +292,31 @@ window.addEventListener('resize', () => {
 });
 
 // DOM 변경 시 1.5초 뒤에 한 번만 갱신
-const observer = new MutationObserver((mutationsList) => {
-    const scrollbarContainer = document.getElementById('question-scrollbar-container');
-    let shouldUpdate = false;
+const observer = new MutationObserver((mutations) => {
+    // Check if any of the mutations are relevant to the chat content.
+    const isRelevantChange = mutations.some(mutation => {
+        // We only care about childList changes (nodes being added/removed).
+        if (mutation.type !== 'childList') return false;
 
-    for (const mutation of mutationsList) {
-        // 🔹 우리 익스텐션이 만든 스크롤바 안에서 일어나는 변화는 무시
-        if (scrollbarContainer && scrollbarContainer.contains(mutation.target)) {
-            continue;
+        // Check if a new message node was added.
+        for (const addedNode of mutation.addedNodes) {
+            // Ensure it's an element node before querying.
+            if (addedNode.nodeType === 1) {
+                // A simple and effective check: does the new node (or its children)
+                // have the attribute that marks it as a user or assistant message?
+                if (addedNode.hasAttribute('data-message-author-role') || addedNode.querySelector('[data-message-author-role]')) {
+                    return true;
+                }
+            }
         }
+        return false;
+    });
 
-        // 🔹 진짜 DOM 구조 / 텍스트가 바뀐 경우만 반응
-        if (mutation.type === 'childList' && (mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0)) {
-            shouldUpdate = true;
-            break;
-        }
-        if (mutation.type === 'characterData') {
-            shouldUpdate = true;
-            break;
-        }
+    // If and only if a relevant change was detected, run the debounced update.
+    if (isRelevantChange) {
+        clearTimeout(debounceTimeout);
+        debounceTimeout = setTimeout(createQuestionMarkers, 1500);
     }
-
-    if (!shouldUpdate) return;
-
-    clearTimeout(debounceTimeout);
-    debounceTimeout = setTimeout(() => {
-        console.log('[Where is the question] DOM changed, updating markers...');
-        createQuestionMarkers();
-    }, 1500);
 });
 
 // 처음 진입했을 때 한 번 실행
