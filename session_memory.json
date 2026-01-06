@@ -7,6 +7,12 @@
       "key_challenge": "Identifying the correct and stable HTML selectors for user messages on the Gemini website, as the site uses dynamic class names.",
       "current_selector": "div.query-text",
       "future_debugging_notes": "Refer to GEMINI_DEV_NOTES.md for a full summary and a guide on how to debug future issues with Gemini integration."
-    }
+    },
+    "latest_changes": [
+      "Removed 'Show questions only' filter functionality from the popup.",
+      "Changed popup heading to 'My questions'.",
+      "Updated README.md with bilingual content and new installation instructions.",
+      "Restored CSS for popup to fix display issues."
+    ]
   }
 }

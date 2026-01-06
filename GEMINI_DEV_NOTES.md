@@ -51,3 +51,16 @@ If the extension breaks on Gemini again (which is possible, as Google may update
     *   Examine the highlighted element and its parents to find a new, stable class name for the container of the user's message.
     *   Look for class names like `query-text`, `user-prompt`, `message`, etc.
 3.  **Update `siteConfig.gemini`:** Once you've found a new selector, update the `questionSelector` and, if necessary, the `getQuestionText` function in `content.js`.
+
+---
+
+## 5. Recent Changes
+
+*   **Popup UI Update:**
+    *   Removed the "Show questions only" checkbox and its associated filtering logic from the popup as it was deemed unnecessary.
+    *   The popup heading was changed from "내 질문 목록" to "My questions" for English localization.
+*   **Documentation:**
+    *   The `README.md` file was updated to be bilingual (Korean/English).
+    *   Installation instructions in `README.md` were updated to point directly to the Chrome Web Store, removing the steps for local installation.
+*   **Popup Styling:**
+    *   Restored and combined styles for `popup.css` to fix a display issue where the question list was not appearing correctly.
