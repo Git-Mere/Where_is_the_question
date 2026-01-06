@@ -1,5 +1,4 @@
 function initialize() {
-    console.log('[WITQ] Initializing content script...');
     // 이 스크립트는 ChatGPT/Gemini 페이지에 주입됩니다.
 
     // 디바운스용 타이머
@@ -8,26 +7,18 @@ function initialize() {
 
     // popup이 열려 있지 않을 때도 콘솔 에러가 안 뜨도록 questionList 메시지를 안전하게 보내는 함수
     function safeSendQuestionList(questionsForPopup) {
-         if (!chrome.runtime || !chrome.runtime.id || !chrome.runtime.sendMessage) {
-            console.warn('[WITQ] chrome.runtime.sendMessage is not available.');
-            return;
-         }
+         if (!chrome.runtime || !chrome.runtime.id || !chrome.runtime.sendMessage) return;
 
         try {
-            console.log('[WITQ] Sending questionList to popup:', questionsForPopup);
             chrome.runtime.sendMessage(
                 { type: 'questionList', questions: questionsForPopup },
                 () => {
-                    if (chrome.runtime.lastError) {
-                        // "Could not establish connection. Receiving end does not exist." is expected if popup is not open.
-                        if (!chrome.runtime.lastError.message.includes('Receiving end does not exist')) {
-                           console.warn('[WITQ] sendMessage failed:', chrome.runtime.lastError.message);
-                        }
-                    }
+                    // popup이 안 열려 있으면 lastError가 생기는데, 콘솔에 안 찍히게 무시
+                    if (chrome.runtime.lastError) {}
                 }
             );
         } catch (e) {
-            console.error('[WITQ] Exception during sendMessage:', e);
+            // 확장 프로그램이 리로드 되는 중 등 예외 상황도 조용히 무시
         }
     }
 
@@ -71,7 +62,6 @@ function initialize() {
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
         if (namespace === 'local' && changes.favorites) {
-            console.log('[WITQ] Favorites changed, re-rendering markers.');
             createQuestionMarkers(true);
         }
     });
@@ -109,9 +99,7 @@ function initialize() {
         gemini: {
             questionSelector: 'div.query-text',
             getQuestionText: (questionElement) => {
-                const text = questionElement.innerText.trim();
-                console.log('[WITQ] Extracted Gemini question text:', text, 'from element:', questionElement);
-                return text;
+                return questionElement.innerText.trim();
             }
         },
         unknown: {
@@ -126,9 +114,7 @@ function initialize() {
         const site = getCurrentSite();
         if (site === 'gemini') {
             const mainEl = document.querySelector('main');
-             console.log('[WITQ] Gemini site, found mainEl:', mainEl);
             if (mainEl && mainEl.scrollHeight > mainEl.clientHeight) {
-                console.log('[WITQ] Using mainEl as scroll container.');
                 return mainEl;
             }
         }
@@ -137,7 +123,6 @@ function initialize() {
         const firstQuestion = document.querySelector(config.questionSelector);
 
         if (!firstQuestion) {
-            console.log('[WITQ] No first question found, using window as scroll container.');
             return window;
         }
 
@@ -145,12 +130,10 @@ function initialize() {
         while (el && el !== document.body) {
             const style = window.getComputedStyle(el);
             if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 10) {
-                 console.log('[WITQ] Found scroll container:', el);
                 return el;
             }
             el = el.parentElement;
         }
-         console.log('[WITQ] No specific scroll container found, using window.');
         return window;
     }
 
@@ -202,15 +185,11 @@ function initialize() {
 
     // 🔹 마커 생성 메인 함수
     async function createQuestionMarkers(force = false) {
-        console.log(`[WITQ] Running createQuestionMarkers (force=${force})`);
         try {
             const site = getCurrentSite();
-            console.log('[WITQ] Current site:', site);
             const config = siteConfig[site] || siteConfig.unknown;
-            console.log('[WITQ] Using config:', config);
 
             const questions = document.querySelectorAll(config.questionSelector);
-            console.log(`[WITQ] Found ${questions.length} question elements using selector: ${config.questionSelector}`, questions);
             const questionsForPopup = [];
 
             const favorites = await getFavorites();
@@ -223,7 +202,6 @@ function initialize() {
                 }
                 lastQuestionsSignature = '';
                 safeSendQuestionList([]);
-                console.log('[WITQ] No questions found, clearing markers.');
                 return;
             }
 
@@ -239,13 +217,10 @@ function initialize() {
             const signature = `${textSignature}::${heightSignature}`;
 
             if (!force && signature === lastQuestionsSignature) {
-                console.log('[WITQ] Signature unchanged, skipping redraw.');
                 return;
             }
 
             lastQuestionsSignature = signature;
-            console.log('[WITQ] Signature changed, redrawing markers.');
-
 
             let scrollbarContainer = document.getElementById('question-scrollbar-container');
 
@@ -253,7 +228,6 @@ function initialize() {
                 scrollbarContainer = document.createElement('div');
                 scrollbarContainer.id = 'question-scrollbar-container';
                 document.body.appendChild(scrollbarContainer);
-                console.log('[WITQ] Created scrollbar container.');
             }
 
             const scrollableHeight = (scrollContainer === window)
@@ -264,7 +238,6 @@ function initialize() {
                 scrollbarContainer.style.display = 'none';
                 scrollbarContainer.innerHTML = '';
                 safeSendQuestionList([]);
-                 console.log('[WITQ] Scrollable height is 0, hiding container.');
                 return;
             } else {
                 scrollbarContainer.style.display = 'block';
@@ -279,11 +252,8 @@ function initialize() {
                 const questionText = config.getQuestionText(question) || `Question ${index + 1}`;
                 
                 if (!questionText) {
-                    console.warn(`[WITQ] Empty questionText for element at index ${index}`, question);
                     return; // Don't create a marker for empty questions
                 }
-
-                console.log(`[WITQ] Processing question ${index}: "${questionText}"`);
 
                 if (isQuestion(questionText)) {
                     marker.classList.add('is-question');
@@ -356,7 +326,8 @@ function initialize() {
 
             safeSendQuestionList(questionsForPopup);
         } catch (error) {
-            console.error('[WITQ] FATAL: Error in createQuestionMarkers:', error);
+            // "Extension context invalidated"와 같은 에러를 여기서 잡아서 무시.
+            // console.warn(`[WITQ] Could not create markers: ${error.message}`);
         }
     }
 
@@ -388,12 +359,10 @@ function initialize() {
                 if (addedNode.nodeType === 1) {
                     if (site === 'gemini') {
                         if (addedNode.matches('.response-container, .user-query') || addedNode.querySelector('.response-container, .user-query')) {
-                            console.log('[WITQ] MutationObserver detected relevant change on Gemini:', addedNode);
                             return true;
                         }
                     } else {
                         if (addedNode.hasAttribute('data-message-author-role') || addedNode.querySelector('[data-message-author-role]')) {
-                            console.log('[WITQ] MutationObserver detected relevant change on ChatGPT:', addedNode);
                             return true;
                         }
                     }
@@ -403,7 +372,6 @@ function initialize() {
         });
 
         if (isRelevantChange) {
-            console.log('[WITQ] Relevant change detected, debouncing createQuestionMarkers.');
             clearTimeout(debounceTimeout);
             debounceTimeout = setTimeout(() => createQuestionMarkers(true), 1500);
         }
@@ -420,5 +388,3 @@ function initialize() {
 
 // 페이지의 자체 스크립트와 충돌을 피하기 위해 약간의 지연 후 실행
 setTimeout(initialize, 2000);
-
-

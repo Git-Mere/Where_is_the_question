@@ -1,1 +1,12 @@
-{}
+{
+  "project_summary": {
+    "title": "Where is the question - Chrome Extension",
+    "purpose": "This extension helps users navigate long chat histories in ChatGPT and Gemini by placing markers on the scrollbar for each user question. Clicking a marker scrolls to that question.",
+    "gemini_development": {
+      "status": "Successfully integrated and working.",
+      "key_challenge": "Identifying the correct and stable HTML selectors for user messages on the Gemini website, as the site uses dynamic class names.",
+      "current_selector": "div.query-text",
+      "future_debugging_notes": "Refer to GEMINI_DEV_NOTES.md for a full summary and a guide on how to debug future issues with Gemini integration."
+    }
+  }
+}
