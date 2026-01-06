@@ -107,9 +107,10 @@ function initialize() {
             }
         },
         gemini: {
-            questionSelector: 'div.prompt-text',
+            questionSelector: '.user-query', // .user-query가 더 안정적
             getQuestionText: (questionElement) => {
-                return questionElement.innerText.trim();
+                const promptTextEl = questionElement.querySelector('.prompt-text');
+                return promptTextEl ? promptTextEl.innerText.trim() : '';
             }
         },
         unknown: {
