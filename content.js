@@ -1,4 +1,5 @@
 function initialize() {
+    console.log('[WITQ] Initializing content script...');
     // 이 스크립트는 ChatGPT/Gemini 페이지에 주입됩니다.
 
     // 디바운스용 타이머
@@ -7,28 +8,32 @@ function initialize() {
 
     // popup이 열려 있지 않을 때도 콘솔 에러가 안 뜨도록 questionList 메시지를 안전하게 보내는 함수
     function safeSendQuestionList(questionsForPopup) {
-         if (!chrome.runtime || !chrome.runtime.id || !chrome.runtime.sendMessage) return;
+         if (!chrome.runtime || !chrome.runtime.id || !chrome.runtime.sendMessage) {
+            console.warn('[WITQ] chrome.runtime.sendMessage is not available.');
+            return;
+         }
 
         try {
+            console.log('[WITQ] Sending questionList to popup:', questionsForPopup);
             chrome.runtime.sendMessage(
                 { type: 'questionList', questions: questionsForPopup },
                 () => {
-                    // popup이 안 열려 있으면 lastError가 생기는데, 콘솔에 안 찍히게 무시
-                    if (chrome.runtime.lastError) {}
+                    if (chrome.runtime.lastError) {
+                        // "Could not establish connection. Receiving end does not exist." is expected if popup is not open.
+                        if (!chrome.runtime.lastError.message.includes('Receiving end does not exist')) {
+                           console.warn('[WITQ] sendMessage failed:', chrome.runtime.lastError.message);
+                        }
+                    }
                 }
             );
         } catch (e) {
-            // 확장 프로그램이 리로드 되는 중 등 예외 상황도 조용히 무시
+            console.error('[WITQ] Exception during sendMessage:', e);
         }
     }
 
     function isQuestion(text) {
-        // 간단한 질문 감지 로직:
-        // 1. 텍스트가 비어있거나 너무 짧으면 질문이 아님
         if (!text || text.length < 3) return false;
-        // 2. 마지막 문자가 물음표인지 확인
         if (text.trim().endsWith('?')) return true;
-        // 3. 질문을 나타내는 일반적인 시작 구문 (영어 기준)
         const lowerText = text.toLowerCase();
         if (lowerText.startsWith('what ') ||
             lowerText.startsWith('where ') ||
@@ -50,15 +55,12 @@ function initialize() {
 
     // --- Storage & Event Listeners ---
 
-    // Storage에서 즐겨찾기 목록 가져오기
     const getFavorites = () => {
         return new Promise((resolve, reject) => {
-            // 컨텍스트가 유효하지 않은 경우를 대비
             if (!chrome.runtime || !chrome.storage) {
                 return reject(new Error("Extension context not available."));
             }
             chrome.storage.local.get({ favorites: [] }, (result) => {
-                // 비동기 콜백 시점에 컨텍스트가 무효화되었는지 확인
                 if (chrome.runtime.lastError) {
                     return reject(new Error(chrome.runtime.lastError.message));
                 }
@@ -67,16 +69,15 @@ function initialize() {
         });
     };
 
-    // 즐겨찾기 목록이 변경되면 마커를 다시 렌더링
     chrome.storage.onChanged.addListener((changes, namespace) => {
         if (namespace === 'local' && changes.favorites) {
+            console.log('[WITQ] Favorites changed, re-rendering markers.');
             createQuestionMarkers(true);
         }
     });
 
     // --- Site-specific Configuration ---
 
-    // 현재 사이트가 어디인지 확인 (chatgpt, gemini 등)
     function getCurrentSite() {
         const { hostname } = window.location;
         if (hostname.includes('chat.openai.com') || hostname.includes('chatgpt.com')) {
@@ -88,7 +89,6 @@ function initialize() {
         return 'unknown';
     }
 
-    // 사이트별 설정
     const siteConfig = {
         chatgpt: {
             questionSelector: 'div[data-message-author-role="user"]',
@@ -107,14 +107,16 @@ function initialize() {
             }
         },
         gemini: {
-            questionSelector: '.user-query', // .user-query가 더 안정적
+            questionSelector: '.user-query',
             getQuestionText: (questionElement) => {
                 const promptTextEl = questionElement.querySelector('.prompt-text');
-                return promptTextEl ? promptTextEl.innerText.trim() : '';
+                const text = promptTextEl ? promptTextEl.innerText.trim() : '';
+                console.log('[WITQ] Extracted Gemini question text:', text, 'from element:', questionElement);
+                return text;
             }
         },
         unknown: {
-            questionSelector: 'div[data-message-author-role="user"]', // 기본값
+            questionSelector: 'div[data-message-author-role="user"]',
             getQuestionText: (questionElement) => questionElement.innerText.trim()
         }
     };
@@ -125,7 +127,9 @@ function initialize() {
         const site = getCurrentSite();
         if (site === 'gemini') {
             const mainEl = document.querySelector('main');
+             console.log('[WITQ] Gemini site, found mainEl:', mainEl);
             if (mainEl && mainEl.scrollHeight > mainEl.clientHeight) {
+                console.log('[WITQ] Using mainEl as scroll container.');
                 return mainEl;
             }
         }
@@ -134,6 +138,7 @@ function initialize() {
         const firstQuestion = document.querySelector(config.questionSelector);
 
         if (!firstQuestion) {
+            console.log('[WITQ] No first question found, using window as scroll container.');
             return window;
         }
 
@@ -141,10 +146,12 @@ function initialize() {
         while (el && el !== document.body) {
             const style = window.getComputedStyle(el);
             if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 10) {
+                 console.log('[WITQ] Found scroll container:', el);
                 return el;
             }
             el = el.parentElement;
         }
+         console.log('[WITQ] No specific scroll container found, using window.');
         return window;
     }
 
@@ -154,7 +161,6 @@ function initialize() {
             const rect = question.getBoundingClientRect();
             return rect.top + window.scrollY;
         }
-        // Gemini에서는 prompt-text의 부모인 .user-query를 기준으로 위치를 잡는 것이 더 안정적일 수 있음
         const visibleElement = question.closest('.user-query') || question;
         let offset = 0;
         let el = visibleElement;
@@ -197,11 +203,15 @@ function initialize() {
 
     // 🔹 마커 생성 메인 함수
     async function createQuestionMarkers(force = false) {
+        console.log(`[WITQ] Running createQuestionMarkers (force=${force})`);
         try {
             const site = getCurrentSite();
+            console.log('[WITQ] Current site:', site);
             const config = siteConfig[site] || siteConfig.unknown;
+            console.log('[WITQ] Using config:', config);
 
             const questions = document.querySelectorAll(config.questionSelector);
+            console.log(`[WITQ] Found ${questions.length} question elements using selector: ${config.questionSelector}`, questions);
             const questionsForPopup = [];
 
             const favorites = await getFavorites();
@@ -214,6 +224,7 @@ function initialize() {
                 }
                 lastQuestionsSignature = '';
                 safeSendQuestionList([]);
+                console.log('[WITQ] No questions found, clearing markers.');
                 return;
             }
 
@@ -229,10 +240,13 @@ function initialize() {
             const signature = `${textSignature}::${heightSignature}`;
 
             if (!force && signature === lastQuestionsSignature) {
+                console.log('[WITQ] Signature unchanged, skipping redraw.');
                 return;
             }
 
             lastQuestionsSignature = signature;
+            console.log('[WITQ] Signature changed, redrawing markers.');
+
 
             let scrollbarContainer = document.getElementById('question-scrollbar-container');
 
@@ -240,6 +254,7 @@ function initialize() {
                 scrollbarContainer = document.createElement('div');
                 scrollbarContainer.id = 'question-scrollbar-container';
                 document.body.appendChild(scrollbarContainer);
+                console.log('[WITQ] Created scrollbar container.');
             }
 
             const scrollableHeight = (scrollContainer === window)
@@ -250,6 +265,7 @@ function initialize() {
                 scrollbarContainer.style.display = 'none';
                 scrollbarContainer.innerHTML = '';
                 safeSendQuestionList([]);
+                 console.log('[WITQ] Scrollable height is 0, hiding container.');
                 return;
             } else {
                 scrollbarContainer.style.display = 'block';
@@ -262,8 +278,14 @@ function initialize() {
                 marker.className = 'question-marker';
 
                 const questionText = config.getQuestionText(question) || `Question ${index + 1}`;
+                
+                if (!questionText) {
+                    console.warn(`[WITQ] Empty questionText for element at index ${index}`, question);
+                    return; // Don't create a marker for empty questions
+                }
 
-                // 질문 감지 및 마커에 클래스 추가
+                console.log(`[WITQ] Processing question ${index}: "${questionText}"`);
+
                 if (isQuestion(questionText)) {
                     marker.classList.add('is-question');
                 }
@@ -304,7 +326,7 @@ function initialize() {
                     id: questionId,
                     text: questionText,
                     position: questionPosition,
-                    isQuestion: isQuestion(questionText) // 질문 여부 추가
+                    isQuestion: isQuestion(questionText)
                 });
 
                 const clamped = Math.min(Math.max(questionPosition, 0), scrollableHeight);
@@ -335,8 +357,7 @@ function initialize() {
 
             safeSendQuestionList(questionsForPopup);
         } catch (error) {
-            // "Extension context invalidated"와 같은 에러를 여기서 잡아서 무시.
-            // console.warn(`[WITQ] Could not create markers: ${error.message}`);
+            console.error('[WITQ] FATAL: Error in createQuestionMarkers:', error);
         }
     }
 
@@ -368,10 +389,12 @@ function initialize() {
                 if (addedNode.nodeType === 1) {
                     if (site === 'gemini') {
                         if (addedNode.matches('.response-container, .user-query') || addedNode.querySelector('.response-container, .user-query')) {
+                            console.log('[WITQ] MutationObserver detected relevant change on Gemini:', addedNode);
                             return true;
                         }
                     } else {
                         if (addedNode.hasAttribute('data-message-author-role') || addedNode.querySelector('[data-message-author-role]')) {
+                            console.log('[WITQ] MutationObserver detected relevant change on ChatGPT:', addedNode);
                             return true;
                         }
                     }
@@ -381,12 +404,13 @@ function initialize() {
         });
 
         if (isRelevantChange) {
+            console.log('[WITQ] Relevant change detected, debouncing createQuestionMarkers.');
             clearTimeout(debounceTimeout);
             debounceTimeout = setTimeout(() => createQuestionMarkers(true), 1500);
         }
     });
 
-    setTimeout(createQuestionMarkers, 1000);
+    setTimeout(() => createQuestionMarkers(true), 1000);
 
     observer.observe(document.body, {
         childList: true,
