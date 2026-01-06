@@ -25,28 +25,6 @@ h1 {
     color: #00529B; /* Gemini Blue */
 }
 
-/* Filter options styling */
-.filter-options {
-    margin-top: 10px;
-    margin-bottom: 10px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-size: 0.9em;
-    color: #555;
-}
-
-.filter-options label {
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-}
-
-.filter-options input[type="checkbox"] {
-    margin-right: 5px;
-    accent-color: #007bff; /* Highlight color for checkbox */
-}
-
 .question-list {
     list-style: none;
     padding: 0;

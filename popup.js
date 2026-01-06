@@ -1,11 +1,9 @@
 document.addEventListener('DOMContentLoaded', () => {
     const questionList = document.getElementById('question-list');
     const emptyMessage = document.getElementById('empty-message');
-    const showQuestionsOnlyCheckbox = document.getElementById('show-questions-only');
 
     let questionsCache = [];
     let favoritesCache = [];
-    let showQuestionsOnly = false; // 필터 상태
 
     // --- Storage API Helpers ---
     const getFavorites = () => {
@@ -24,40 +22,19 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
-    const getFilterState = () => {
-        return new Promise(resolve => {
-            chrome.storage.local.get({ showQuestionsOnly: false }, (result) => {
-                resolve(result.showQuestionsOnly);
-            });
-        });
-    };
-
-    const saveFilterState = (state) => {
-        return new Promise(resolve => {
-            chrome.storage.local.set({ showQuestionsOnly: state }, () => {
-                resolve();
-            });
-        });
-    };
-
 
     // --- UI Update ---
     function updatePopupUI() {
         questionList.innerHTML = ''; // 목록 초기화
 
-        let filteredQuestions = questionsCache;
-        if (showQuestionsOnly) {
-            filteredQuestions = questionsCache.filter(q => q.isQuestion);
-        }
-
-        if (!filteredQuestions || filteredQuestions.length === 0) {
+        if (!questionsCache || questionsCache.length === 0) {
             emptyMessage.style.display = 'block';
             questionList.style.display = 'none';
         } else {
             emptyMessage.style.display = 'none';
             questionList.style.display = 'block';
 
-            filteredQuestions.forEach(question => {
+            questionsCache.forEach(question => {
                 const isFavorite = favoritesCache.some(fav => fav.id === question.id);
 
                 const li = document.createElement('li');
@@ -103,12 +80,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Event Listeners & Initial Load ---
-    showQuestionsOnlyCheckbox.addEventListener('change', async (event) => {
-        showQuestionsOnly = event.target.checked;
-        await saveFilterState(showQuestionsOnly);
-        updatePopupUI();
-    });
-
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.type === 'questionList') {
             questionsCache = message.questions;
@@ -119,8 +90,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // 팝업이 열릴 때 실행
     async function initialize() {
         favoritesCache = await getFavorites();
-        showQuestionsOnly = await getFilterState();
-        showQuestionsOnlyCheckbox.checked = showQuestionsOnly; // 체크박스 상태 업데이트
 
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             const activeTab = tabs[0];
