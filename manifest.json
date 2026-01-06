@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Where is the question",
-  "description": "Finding my questions in ChatGPT",
-  "version": "1.0",
+  "description": "Finding my questions in ChatGPT, Gemini",
+  "version": "1.1",
   "permissions": [
     "tabs",
     "storage"
