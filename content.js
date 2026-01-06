@@ -109,7 +109,8 @@ function initialize() {
         gemini: {
             questionSelector: '.user-query',
             getQuestionText: (questionElement) => {
-                const promptTextEl = questionElement.querySelector('.prompt-text');
+                // query-text-line 클래스를 가진 <p> 태그에서 텍스트 추출
+                const promptTextEl = questionElement.querySelector('p.query-text-line');
                 const text = promptTextEl ? promptTextEl.innerText.trim() : '';
                 console.log('[WITQ] Extracted Gemini question text:', text, 'from element:', questionElement);
                 return text;
