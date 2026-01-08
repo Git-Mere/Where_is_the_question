@@ -1,4 +1,11 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // --- Internationalization ---
+    const i18n_elements = document.querySelectorAll('[data-i18n-content]');
+    i18n_elements.forEach(el => {
+        el.textContent = chrome.i18n.getMessage(el.getAttribute('data-i18n-content'));
+    });
+
+    // --- DOM Elements ---
     const questionList = document.getElementById('question-list');
     const emptyMessage = document.getElementById('empty-message');
 
@@ -22,10 +29,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
-
     // --- UI Update ---
     function updatePopupUI() {
-        questionList.innerHTML = ''; // 목록 초기화
+        questionList.innerHTML = ''; // Clear list
 
         if (!questionsCache || questionsCache.length === 0) {
             emptyMessage.style.display = 'block';
@@ -87,7 +93,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // 팝업이 열릴 때 실행
     async function initialize() {
         favoritesCache = await getFavorites();
 
@@ -96,7 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (activeTab && activeTab.id) {
                 chrome.tabs.sendMessage(activeTab.id, { type: 'getQuestions' }, (response) => {
                     if (chrome.runtime.lastError) {
-                        console.log('Content script not available. Showing empty message.');
+                        console.log(chrome.i18n.getMessage('contentScriptNotAvailable'));
                         questionsCache = [];
                         updatePopupUI();
                     }

@@ -1,0 +1,34 @@
+{
+    "extName": {
+        "message": "Where is the question",
+        "description": "The name of the extension."
+    },
+    "extDescription": {
+        "message": "Finding my questions in ChatGPT, Gemini",
+        "description": "The description of the extension."
+    },
+    "extDefaultTitle": {
+        "message": "Where is the question",
+        "description": "The default title of the extension's action."
+    },
+    "popupTitle": {
+        "message": "My Questions",
+        "description": "The title of the popup window."
+    },
+    "popupHeader": {
+        "message": "My Questions",
+        "description": "The header text in the popup window."
+    },
+    "emptyMessageLine1": {
+        "message": "No questions to display.",
+        "description": "First line of the message shown when no questions are found."
+    },
+    "emptyMessageLine2": {
+        "message": "Ask a question on the ChatGPT or Gemini page, and it will appear here.",
+        "description": "Second line of the message shown when no questions are found."
+    },
+    "contentScriptNotAvailable": {
+        "message": "Content script not available. Showing empty message.",
+        "description": "Error message for developers in the console."
+    }
+}

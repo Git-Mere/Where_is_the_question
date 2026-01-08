@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>질문 목록</title>
+    <title data-i18n-content="popupTitle"></title>
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>My questions</h1>
+            <h1 data-i18n-content="popupHeader"></h1>
         </div>
         <ul id="question-list" class="question-list">
             <!-- 
@@ -20,8 +20,8 @@
             -->
         </ul>
         <div id="empty-message" class="empty-message" style="display: none;">
-            <p>표시할 질문이 없습니다.</p>
-            <p>ChatGPT 페이지에서 질문을 하면 여기에 표시됩니다.</p>
+            <p data-i18n-content="emptyMessageLine1"></p>
+            <p data-i18n-content="emptyMessageLine2"></p>
         </div>
     </div>
     <script src="popup.js"></script>
