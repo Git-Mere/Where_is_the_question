@@ -12,7 +12,17 @@
       "Removed 'Show questions only' filter functionality from the popup.",
       "Changed popup heading to 'My questions'.",
       "Updated README.md with bilingual content and new installation instructions.",
-      "Restored CSS for popup to fix display issues."
+      "Restored CSS for popup to fix display issues.",
+      "**Session Updates (Feb 9, 2026):**",
+      "Implemented dynamic positioning for question marker tooltips to prevent off-screen display.",
+      "Replaced yellow background highlight for favorited questions with a prominent star icon, dynamically added/removed via JavaScript and styled with CSS.",
+      "Enhanced tooltips to display attached filenames and handle generic image placeholders ('[업로드된 이미지]', '[업로드된 이미지들]').",
+      "Refactored tooltip content generation to use HTML strings (<div> tags) and `innerHTML` for correct newline formatting.",
+      "Removed conflicting CSS text truncation properties from `.question-marker-tooltip`.",
+      "Initiated major performance refactoring by modularizing `content.js` into `src/modules/config.js`, `src/modules/dom.js`, and `src/modules/storage.js`.",
+      "Rewrote `content.js` to contain a leaner `MarkerManager` class, orchestrating interactions between the new modules.",
+      "Updated `manifest.json` to load modularized JavaScript files in the correct order.",
+      "Implemented incremental marker updates in `MarkerManager.updateMarkers` to optimize performance by managing markers dynamically (add, remove, update) instead of full re-renders."
     ]
   }
 }

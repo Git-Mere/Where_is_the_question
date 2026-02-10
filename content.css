@@ -57,8 +57,20 @@
     max-height: 100px; /* 최대 높이 100px */
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: normal;
-    display: -webkit-box;
-    -webkit-line-clamp: 4; /* 4줄까지 보이도록 */
-    -webkit-box-orient: vertical;
+}
+
+/* 즐겨찾기된 질문의 컨테이너 */
+div[data-testid^="conversation-turn"], .user-query {
+    position: relative;
+}
+
+/* 즐겨찾기 별표 */
+.witq-favorite-star {
+    position: absolute;
+    top: 20px;
+    left: 0px;
+    font-size: 84px;
+    color: rgba(255, 238, 0, 0.9);
+    z-index: 10;
+    text-shadow: 0 0 4px rgba(0,0,0,0.3);
 }

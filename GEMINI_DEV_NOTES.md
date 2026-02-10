@@ -64,3 +64,47 @@ If the extension breaks on Gemini again (which is possible, as Google may update
     *   Installation instructions in `README.md` were updated to point directly to the Chrome Web Store, removing the steps for local installation.
 *   **Popup Styling:**
     *   Restored and combined styles for `popup.css` to fix a display issue where the question list was not appearing correctly.
+
+---
+
+## 6. Session Updates (Feb 9, 2026)
+
+This session focused on implementing several key improvements and a major performance refactoring.
+
+### 6.1. Feature Enhancements
+
+*   **Tooltip Positioning Fix:**
+    *   Implemented dynamic positioning for the question marker tooltip in `content.js` to prevent it from rendering off-screen (e.g., behind the taskbar or bookmarks bar).
+    *   Adjusted `content.css` to accommodate these dynamic positioning changes.
+*   **Favorite Question Star Icon:**
+    *   Replaced the previous yellow background highlight for favorited questions with a prominent star icon (`★`).
+    *   Modified `content.js` to dynamically add and remove this star element next to favorited questions.
+    *   Updated `content.css` to style the star's appearance, size (now significantly larger), and position (adjusted to be more to the right and downwards as per user feedback).
+*   **Enhanced Tooltip Content for File Attachments:**
+    *   Improved `extractQuestionData` logic to correctly extract and display attached filenames alongside the main question text.
+    *   Implemented special handling for generic image placeholders: `[업로드된 이미지]` for single image uploads and `[업로드된 이미지들]` for two or more.
+    *   Refactored tooltip content generation to return HTML strings (using `<div>` tags for each entry) and updated `showTooltip` to use `innerHTML`. This ensures proper newline formatting for each filename and the question text.
+    *   Modified `content.css` by removing conflicting text truncation properties (`-webkit-box`, `-webkit-line-clamp`, `white-space: pre-line`) from `.question-marker-tooltip` to allow the `div`-based HTML structure to render correctly.
+
+### 6.2. Performance Refactoring
+
+A major refactoring effort was undertaken to improve the extension's performance, especially when dealing with a large number of questions, to minimize "slowness and stuttering."
+
+*   **Modularization of `content.js`:**
+    *   The monolithic `content.js` script was broken down into a more modular and organized architecture:
+        *   `src/modules/config.js`: Encapsulates site-specific configurations, `getCurrentSite`, `getSiteConfig`, `extractQuestionData`, and `isQuestion` logic.
+        *   `src/modules/dom.js`: Contains DOM manipulation and scrolling utilities such as `getScrollContainer`, `getQuestionPositionInContainer`, `getScrollOffset`, and `scrollToQuestionPosition`.
+        *   `src/modules/storage.js`: Houses storage-related functions, including `getFavorites` and `safeSendQuestionList`.
+        *   The main `content.js` file was rewritten to contain a leaner `MarkerManager` class, which now acts as an orchestrator, utilizing the functions provided by these new modules.
+    *   `manifest.json` was updated to load these modularized JavaScript files in the correct sequence, ensuring proper dependency resolution.
+*   **Incremental Marker Updates:**
+    *   The `MarkerManager.updateMarkers` method was significantly optimized to perform incremental updates instead of completely re-rendering all markers on every change.
+    *   A `Map` (`this.markers`) was introduced to efficiently track the mapping between `questionElement`s and their corresponding `markerElement`s.
+    *   The update logic now intelligently:
+        *   Removes `markerElement`s (and their associated star icons) only for `questionElement`s that are no longer present in the DOM.
+        *   Creates new `markerElement`s only for `questionElement`s that have newly appeared.
+        *   Updates the position, favorite status, and other relevant properties of existing `markerElement`s, minimizing costly DOM manipulation.
+*   **Improved `MutationObserver`:**
+    *   The `MutationObserver` was refined to efficiently detect relevant DOM changes (additions and removals of question elements).
+    *   The observer's target was narrowed to the chat's scroll container (instead of `document.body`), further reducing unnecessary triggers.
+    *   While still triggering a debounced full `updateMarkers` call for stability in complex chat UIs, the underlying `updateMarkers` method is now highly optimized to handle these updates efficiently.
