@@ -109,3 +109,5 @@ This session focused on deep performance optimization and fixing UI bugs.
     *   Modified `popup.js` to strip HTML tags (like `<div>`) from the question list, ensuring a clean text-only display in the popup.
 *   **Documentation:**
     *   Updated `README.md` to include a troubleshooting tip (both English and Korean) advising users to refresh the page if the extension doesn't work correctly.
+*   **Version Bump:**
+    *   Updated `manifest.json` version to `1.2` for Chrome Web Store release.

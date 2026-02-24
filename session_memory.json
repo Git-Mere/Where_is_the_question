@@ -15,7 +15,8 @@
       "Enhanced `isQuestion` logic with better regex and Korean support.",
       "Improved DOM utilities in `dom.js` with scroll container caching and `getBoundingClientRect` for positioning.",
       "Fixed popup UI bug where HTML tags were displayed in the question list.",
-      "Updated `README.md` with troubleshooting tips (refresh page instruction)."
+      "Updated `README.md` with troubleshooting tips (refresh page instruction).",
+      "Bumped version to 1.2 for Chrome Web Store release."
     ]
   }
 }
