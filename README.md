@@ -33,19 +33,19 @@ Chrome 웹 스토어에서 확장 프로그램을 다운로드하여 설치하�
 
 ## 📸 Screenshots / 스크린샷
 
-1.  **Basic Functionality**: Scrollbar with question markers generated.
+1.  **Basic Functionality**: Scrollbar with question markers generated.  
     **기본 기능**: 스크롤바에 질문 마커들이 생성된 모습
     ![Basic Functionality](images/main.png)
 
-2.  **Question Preview**: Question content displayed when hovering over a marker.
+2.  **Question Preview**: Question content displayed when hovering over a marker.  
     **질문 미리보기**: 마커에 마우스를 올렸을 때 질문 내용이 보이는 모습
     ![Question Preview](images/hover.png)
 
-3.  **Favorites**: A marker marked as a yellow favorite by right-clicking.
+3.  **Favorites**: A marker marked as a yellow favorite by right-clicking.  
     **즐겨찾기**: 마커를 우클릭하여 노란색 즐겨찾기로 등록한 모습
     ![Favorites](images/favorite.png)
 
-4.  **Popup View**: Managing the list of questions in the extension popup.
+4.  **Popup View**: Managing the list of questions in the extension popup.  
     **팝업 화면**: 확장 프로그램 팝업에서 질문 목록을 관리하는 모습
     ![Popup View](images/popup.png)
 
@@ -58,12 +58,14 @@ Chrome 웹 스토어에서 확장 프로그램을 다운로드하여 설치하�
 *   **Navigate**: Click a marker to go to the question's location.
 *   **Preview**: Hover over a marker to see the question content.
 *   **Favorite/Unfavorite**: Right-click a marker to mark/unmark it as a favorite.
+*   **Note**: If the extension does not work correctly, please refresh the page.
 
 **Korean:** 확장 프로그램이 설치되면 ChatGPT와 같은 지원 페이지에 접속하세요. 질문을 할 때마다 스크롤바에 마커가 자동으로 생성됩니다.
 
 *   **이동**: 마커를 클릭하여 해당 질문 위치로 이동합니다.
 *   **미리보기**: 마커 위에 마우스를 올려 질문 내용을 확인합니다.
 *   **즐겨찾기**: 마커를 마우스 오른쪽 버튼으로 클릭하여 즐겨찾기를 등록하거나 해제합니다.
+*   **참고**: 만약 확장 프로그램이 제대로 작동하지 않는다면, 페이지를 새로고침해 주세요.
 
 ---
 

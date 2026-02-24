@@ -49,40 +49,47 @@ window.WITQ.config = {
     },
 
     extractQuestionData: function(container, textSelector, fileSelectors, containerSelectorsToRemove) {
-        let mainText = '';
-        if (container) {
-            const clone = container.cloneNode(true);
-            (containerSelectorsToRemove || []).forEach(selector => {
-                clone.querySelectorAll(selector).forEach(el => el.remove());
-            });
-            mainText = clone.innerText.trim();
-        }
+        if (!container) return '';
 
+        // 1. Collect file/image information
         let imageUploadCount = 0;
         const fileNames = [];
-        if (container) {
-            (fileSelectors || []).forEach(selector => {
-                container.querySelectorAll(selector).forEach(fileEl => {
-                    let fileName = (fileEl.alt || fileEl.textContent || '').trim();
-
-                    if (fileEl.tagName === 'IMG' && (fileName.toLowerCase() === 'image' || fileName.toLowerCase().startsWith('image:'))) {
-                        imageUploadCount++;
-                    } else if (fileName) {
-                        if (!fileNames.includes(fileName)) {
-                            fileNames.push(fileName);
-                        }
-                    }
-                });
+        
+        (fileSelectors || []).forEach(selector => {
+            container.querySelectorAll(selector).forEach(fileEl => {
+                let fileName = (fileEl.alt || fileEl.textContent || '').trim();
+                if (fileEl.tagName === 'IMG' && (fileName.toLowerCase() === 'image' || fileName.toLowerCase().startsWith('image:'))) {
+                    imageUploadCount++;
+                } else if (fileName) {
+                    if (!fileNames.includes(fileName)) fileNames.push(fileName);
+                }
             });
-        }
+        });
+
+        // 2. Extract main text efficiently without cloneNode
+        // We'll use a simple recursive function to get text, skipping 'toRemove' elements
+        const getCleanText = (node, excludeSelectors) => {
+            let text = '';
+            for (let child of node.childNodes) {
+                if (child.nodeType === Node.TEXT_NODE) {
+                    text += child.textContent;
+                } else if (child.nodeType === Node.ELEMENT_NODE) {
+                    const shouldExclude = excludeSelectors.some(sel => child.matches(sel) || child.closest(sel));
+                    if (!shouldExclude) {
+                        text += getCleanText(child, excludeSelectors);
+                    }
+                }
+            }
+            return text;
+        };
+
+        const mainText = getCleanText(container, containerSelectorsToRemove || []).trim();
         
         const parts = [];
         if (imageUploadCount > 0) {
             parts.push(imageUploadCount > 1 ? '[업로드된 이미지들]' : '[업로드된 이미지]');
         }
-        fileNames.forEach(name => {
-            parts.push(`[${name}]`);
-        });
+        fileNames.forEach(name => parts.push(`[${name}]`));
 
         const fileString = parts.map(part => `<div>${part}</div>`).join('');
         const mainTextString = mainText ? `<div>${mainText}</div>` : '';
@@ -92,11 +99,21 @@ window.WITQ.config = {
 
     isQuestion: function(text) {
         if (!text || text.length < 3) return false;
-        const cleanText = text.replace(/<div>/g, ' ').replace(/<\/div>/g, ' ').trim();
-        if (cleanText.endsWith('?')) return true;
+        const cleanText = text.replace(/<[^>]+>/g, ' ').trim();
+        
+        // Match common question marks at the end
+        if (/[?？]$/.test(cleanText)) return true;
+
         const lowerText = cleanText.toLowerCase();
-        const prefixes = ['what ', 'where ', 'when ', 'who ', 'why ', 'how ', 'is ', 'can ', 'could ', 'would ', 'do ', 'does '];
-        return prefixes.some(p => lowerText.startsWith(p));
+        // Common English question starters
+        const engPrefixes = /^(what|where|when|who|why|how|is|can|could|would|do|does|did|will|should|may|might)\s/i;
+        if (engPrefixes.test(lowerText)) return true;
+
+        // Korean question markers (simple check for endings)
+        const korEndings = /[가까나오죠요]\?*$/;
+        if (korEndings.test(cleanText)) return true;
+
+        return false;
     }
 };
 

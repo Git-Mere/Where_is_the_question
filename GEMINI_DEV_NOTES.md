@@ -86,25 +86,26 @@ This session focused on implementing several key improvements and a major perfor
     *   Refactored tooltip content generation to return HTML strings (using `<div>` tags for each entry) and updated `showTooltip` to use `innerHTML`. This ensures proper newline formatting for each filename and the question text.
     *   Modified `content.css` by removing conflicting text truncation properties (`-webkit-box`, `-webkit-line-clamp`, `white-space: pre-line`) from `.question-marker-tooltip` to allow the `div`-based HTML structure to render correctly.
 
-### 6.2. Performance Refactoring
+### 6.2. Performance Refactoring (Previous)
 
-A major refactoring effort was undertaken to improve the extension's performance, especially when dealing with a large number of questions, to minimize "slowness and stuttering."
+A major refactoring effort was undertaken to improve the extension's performance, especially when dealing with a large number of questions, to minimize "slowness and stuttering." (Details omitted for brevity, see history).
 
-*   **Modularization of `content.js`:**
-    *   The monolithic `content.js` script was broken down into a more modular and organized architecture:
-        *   `src/modules/config.js`: Encapsulates site-specific configurations, `getCurrentSite`, `getSiteConfig`, `extractQuestionData`, and `isQuestion` logic.
-        *   `src/modules/dom.js`: Contains DOM manipulation and scrolling utilities such as `getScrollContainer`, `getQuestionPositionInContainer`, `getScrollOffset`, and `scrollToQuestionPosition`.
-        *   `src/modules/storage.js`: Houses storage-related functions, including `getFavorites` and `safeSendQuestionList`.
-        *   The main `content.js` file was rewritten to contain a leaner `MarkerManager` class, which now acts as an orchestrator, utilizing the functions provided by these new modules.
-    *   `manifest.json` was updated to load these modularized JavaScript files in the correct sequence, ensuring proper dependency resolution.
-*   **Incremental Marker Updates:**
-    *   The `MarkerManager.updateMarkers` method was significantly optimized to perform incremental updates instead of completely re-rendering all markers on every change.
-    *   A `Map` (`this.markers`) was introduced to efficiently track the mapping between `questionElement`s and their corresponding `markerElement`s.
-    *   The update logic now intelligently:
-        *   Removes `markerElement`s (and their associated star icons) only for `questionElement`s that are no longer present in the DOM.
-        *   Creates new `markerElement`s only for `questionElement`s that have newly appeared.
-        *   Updates the position, favorite status, and other relevant properties of existing `markerElement`s, minimizing costly DOM manipulation.
-*   **Improved `MutationObserver`:**
-    *   The `MutationObserver` was refined to efficiently detect relevant DOM changes (additions and removals of question elements).
-    *   The observer's target was narrowed to the chat's scroll container (instead of `document.body`), further reducing unnecessary triggers.
-    *   While still triggering a debounced full `updateMarkers` call for stability in complex chat UIs, the underlying `updateMarkers` method is now highly optimized to handle these updates efficiently.
+### 6.3. Performance & Logic Optimization (Feb 24, 2026)
+
+This session focused on deep performance optimization and fixing UI bugs.
+
+*   **Deep Performance Refactoring:**
+    *   **`MarkerManager` (content.js):**
+        *   Implemented `WeakMap` (`questionDataCache`) to cache parsed question data (text, ID, position), significantly reducing redundant parsing.
+        *   Minimized Layout Thrashing by batching DOM reads (e.g., container dimensions) outside of loops.
+        *   Optimized `MutationObserver` to more precisely filter relevant DOM changes.
+    *   **`src/modules/config.js`:**
+        *   Optimized `extractQuestionData` by replacing the expensive `cloneNode(true)` method with a direct, recursive text node traversal.
+        *   Enhanced `isQuestion` logic with more robust regex, including improved support for Korean question endings (`-까`, `-나`, `-요` 등).
+    *   **`src/modules/dom.js`:**
+        *   Implemented aggressive caching for the scroll container (2-second TTL) to drastically reduce calls to `window.getComputedStyle`.
+        *   Refactored `getQuestionPositionInContainer` to use `getBoundingClientRect` for faster and more accurate calculations.
+*   **Popup UI Bug Fix:**
+    *   Modified `popup.js` to strip HTML tags (like `<div>`) from the question list, ensuring a clean text-only display in the popup.
+*   **Documentation:**
+    *   Updated `README.md` to include a troubleshooting tip (both English and Korean) advising users to refresh the page if the extension doesn't work correctly.

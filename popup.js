@@ -47,10 +47,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 li.className = 'question-item';
                 li.dataset.questionId = question.id;
 
+                // Strip HTML tags for clean display in the popup list
+                const cleanText = question.text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
                 const questionText = document.createElement('span');
                 questionText.className = 'question-text';
-                questionText.textContent = question.text;
-                questionText.title = question.text;
+                questionText.textContent = cleanText;
+                questionText.title = cleanText;
                 questionText.addEventListener('click', () => {
                     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                         const activeTab = tabs[0];

@@ -1,23 +1,22 @@
 class MarkerManager {
     constructor() {
         this.debounceTimeout = null;
-        this.lastQuestionsSignature = '';
         this.favorites = [];
         this.site = window.WITQ.config.site;
         this.config = window.WITQ.config.config;
-        this.scrollContainer = null;
         this.scrollbarContainer = null;
         this.observer = null;
         this.markers = new Map(); // Maps questionElement to markerElement
+        this.questionDataCache = new WeakMap(); // Cache for parsed question data
 
         this.initialize();
     }
 
-    initialize() {
-        window.WITQ.storage.getFavorites().then(favorites => {
-            this.favorites = favorites;
-            this.updateMarkers(true); // Initial marker creation
-        });
+    async initialize() {
+        try {
+            this.favorites = await window.WITQ.storage.getFavorites();
+            this.updateMarkers(true);
+        } catch (e) {}
 
         this.setupEventListeners();
         this.startObserver();
@@ -28,17 +27,9 @@ class MarkerManager {
     async updateMarkers(force = false) {
         try {
             const questions = document.querySelectorAll(this.config.questionSelector);
-            const questionsForPopup = [];
-            const currentQuestionElements = new Set(questions); // For efficient lookup
-
-            // Get scrollbar container
-            if (!this.scrollbarContainer) {
-                this.scrollbarContainer = document.getElementById('question-scrollbar-container');
-                if (!this.scrollbarContainer) {
-                    this.scrollbarContainer = document.createElement('div');
-                    this.scrollbarContainer.id = 'question-scrollbar-container';
-                    document.body.appendChild(this.scrollbarContainer);
-                }
+            if (questions.length === 0 && this.markers.size === 0) {
+                if (this.scrollbarContainer) this.scrollbarContainer.style.display = 'none';
+                return;
             }
 
             const container = window.WITQ.dom.getScrollContainer();
@@ -46,68 +37,102 @@ class MarkerManager {
                 ? Math.max(document.documentElement.scrollHeight - window.innerHeight, 1) 
                 : Math.max(container.scrollHeight - container.clientHeight, 1);
             
+            this.ensureScrollbarContainer();
+
             if (questions.length === 0 || scrollableHeight <= 0) {
                  this.scrollbarContainer.style.display = 'none';
                  this.scrollbarContainer.innerHTML = '';
                  window.WITQ.storage.safeSendQuestionList([]);
-                 this.markers.clear(); // Clear all tracked markers
+                 this.markers.clear();
                  return;
-            } else {
-                 this.scrollbarContainer.style.display = 'block';
             }
 
-            // Remove markers for questions that no longer exist
+            this.scrollbarContainer.style.display = 'block';
+            this.favorites = await window.WITQ.storage.getFavorites();
+
+            const currentQuestionElements = new Set(questions);
+            const questionsForPopup = [];
+
+            // 1. Cleanup old markers
             for (const [questionEl, markerEl] of this.markers.entries()) {
                 if (!currentQuestionElements.has(questionEl) || !document.body.contains(questionEl)) {
-                    markerEl.remove();
-                    // Also remove the star from the question wrapper if it exists
-                    const questionWrapper = questionEl.closest('.user-query') || questionEl.closest('div[data-testid^="conversation-turn"]') || questionEl;
-                    const existingStar = questionWrapper ? questionWrapper.querySelector('.witq-favorite-star') : null;
-                    if (existingStar) {
-                        existingStar.remove();
-                    }
-                    this.markers.delete(questionEl);
+                    this.removeMarker(questionEl, markerEl);
                 }
             }
 
-            this.favorites = await window.WITQ.storage.getFavorites(); // Refresh favorites
-
-            // Add new markers or update existing ones
+            // 2. Add/Update markers
             questions.forEach((question) => {
-                const questionText = this.config.getQuestionText(question);
-                if (!questionText) return;
+                const data = this.getOrUpdateQuestionData(question, container);
+                if (!data || !data.text) return;
 
                 let marker = this.markers.get(question);
                 if (!marker) {
-                    marker = this.createMarkerElement(question, questionText, container);
+                    marker = this.createMarkerElement(question, data, container);
                     this.scrollbarContainer.appendChild(marker);
                     this.markers.set(question, marker);
                 } else {
-                    this.updateMarkerElement(marker, question, questionText, container);
+                    this.updateMarkerElement(marker, question, data, container, scrollableHeight);
                 }
 
                 questionsForPopup.push({
-                    id: this.getQuestionId(question, questionText, container),
-                    text: questionText,
-                    position: window.WITQ.dom.getQuestionPositionInContainer(question, container),
-                    isQuestion: window.WITQ.config.isQuestion(questionText)
+                    id: data.id,
+                    text: data.text,
+                    position: data.position,
+                    isQuestion: data.isQuestion
                 });
             });
 
             window.WITQ.storage.safeSendQuestionList(questionsForPopup);
-            this.lastQuestionsSignature = this.getQuestionsSignature(questions, container); // Update signature after all changes
         } catch (error) {
-            // console.warn(`[WITQ] Marker update failed: ${error.message}`);
+            // console.warn(`[WITQ] Marker update failed`, error);
         }
     }
-    
-    getQuestionsSignature(questions, container) {
-        const newSignature = Array.from(questions).map(q => q.innerText.trim()).join('||');
-        const heightSignature = (container === window) ? document.documentElement.scrollHeight : container.scrollHeight;
-        return `${newSignature}::${heightSignature}`;
+
+    ensureScrollbarContainer() {
+        if (!this.scrollbarContainer) {
+            this.scrollbarContainer = document.getElementById('question-scrollbar-container');
+            if (!this.scrollbarContainer) {
+                this.scrollbarContainer = document.createElement('div');
+                this.scrollbarContainer.id = 'question-scrollbar-container';
+                document.body.appendChild(this.scrollbarContainer);
+            }
+        }
     }
 
-    createMarkerElement(question, questionText, container) {
+    removeMarker(questionEl, markerEl) {
+        markerEl.remove();
+        const questionWrapper = questionEl.closest('.user-query') || questionEl.closest('div[data-testid^="conversation-turn"]') || questionEl;
+        const existingStar = questionWrapper ? questionWrapper.querySelector('.witq-favorite-star') : null;
+        if (existingStar) existingStar.remove();
+        this.markers.delete(questionEl);
+    }
+
+    getOrUpdateQuestionData(question, container) {
+        let cached = this.questionDataCache.get(question);
+        const currentPos = window.WITQ.dom.getQuestionPositionInContainer(question, container);
+        
+        // Re-extract only if position changed significantly or not cached
+        if (!cached || Math.abs(cached.position - currentPos) > 1) {
+            const text = this.config.getQuestionText(question);
+            if (!text) return null;
+            
+            cached = {
+                text,
+                position: currentPos,
+                id: this.generateQuestionId(text, currentPos),
+                isQuestion: window.WITQ.config.isQuestion(text)
+            };
+            this.questionDataCache.set(question, cached);
+        }
+        return cached;
+    }
+
+    generateQuestionId(text, position) {
+        const textPart = text.replace(/<[^>]+>/g, ' ').substring(0, 30);
+        return `${textPart}-${Math.round(position)}`;
+    }
+
+    createMarkerElement(question, data, container) {
         const marker = document.createElement('div');
         marker.className = 'question-marker';
 
@@ -116,14 +141,16 @@ class MarkerManager {
         marker.appendChild(tooltip);
 
         let hideTooltipTimer = null;
-        const showTooltip = (text) => {
+        const showTooltip = () => {
             clearTimeout(hideTooltipTimer);
-            tooltip.innerHTML = text;
+            tooltip.innerHTML = data.text;
             tooltip.style.visibility = 'visible';
             tooltip.style.opacity = '0';
-            void tooltip.offsetHeight; // Force reflow
+            
+            // Minimal reflow for positioning
             const rect = tooltip.getBoundingClientRect();
             const viewportHeight = window.innerHeight;
+            
             if (rect.top < 10) {
                 tooltip.style.top = '0px';
                 tooltip.style.transform = 'translateY(0)';
@@ -138,88 +165,74 @@ class MarkerManager {
             }
             tooltip.style.opacity = '1';
         };
+
         const hideTooltip = () => {
             hideTooltipTimer = setTimeout(() => {
                 tooltip.style.opacity = '0';
                 tooltip.style.visibility = 'hidden';
-                tooltip.innerHTML = '';
             }, 200);
         };
 
-        marker.addEventListener('mouseenter', () => showTooltip(questionText));
+        marker.addEventListener('mouseenter', showTooltip);
         marker.addEventListener('mouseleave', hideTooltip);
         tooltip.addEventListener('mouseenter', () => clearTimeout(hideTooltipTimer));
         tooltip.addEventListener('mouseleave', hideTooltip);
 
         marker.addEventListener('click', () => {
             const currentContainer = window.WITQ.dom.getScrollContainer();
-            const currentPos = window.WITQ.dom.getQuestionPositionInContainer(question, currentContainer);
-            window.WITQ.dom.scrollToQuestionPosition(currentPos, currentContainer);
+            const currentData = this.getOrUpdateQuestionData(question, currentContainer);
+            if (currentData) {
+                window.WITQ.dom.scrollToQuestionPosition(currentData.position, currentContainer);
+            }
         });
 
         marker.addEventListener('contextmenu', async (e) => {
             e.preventDefault();
             const currentFavorites = await window.WITQ.storage.getFavorites();
-            const questionId = this.getQuestionId(question, questionText, container);
-            const isFavorite = currentFavorites.some(fav => fav.id === questionId);
-            let updatedFavorites;
-            if (isFavorite) {
-                updatedFavorites = currentFavorites.filter(fav => fav.id !== questionId);
-            } else {
-                updatedFavorites = [...currentFavorites, { id: questionId, text: questionText, position: window.WITQ.dom.getQuestionPositionInContainer(question, container) }];
-            }
+            const isFavorite = currentFavorites.some(fav => fav.id === data.id);
+            const updatedFavorites = isFavorite 
+                ? currentFavorites.filter(fav => fav.id !== data.id)
+                : [...currentFavorites, { id: data.id, text: data.text, position: data.position }];
+            
             chrome.storage.local.set({ favorites: updatedFavorites });
         });
 
-        this.updateMarkerElement(marker, question, questionText, container); // Initial update for position/favorite
-
+        const container_ = window.WITQ.dom.getScrollContainer();
+        const scrollableHeight = (container_ === window) 
+            ? Math.max(document.documentElement.scrollHeight - window.innerHeight, 1) 
+            : Math.max(container_.scrollHeight - container_.clientHeight, 1);
+        
+        this.updateMarkerElement(marker, question, data, container_, scrollableHeight);
         return marker;
     }
 
-    updateMarkerElement(marker, question, questionText, container) {
-        // Update question marker style
-        if (window.WITQ.config.isQuestion(questionText)) {
-            marker.classList.add('is-question');
-        } else {
-            marker.classList.remove('is-question');
-        }
+    updateMarkerElement(marker, question, data, container, scrollableHeight) {
+        // Toggle question class
+        marker.classList.toggle('is-question', data.isQuestion);
 
         // Update favorite status and star icon
-        const questionId = this.getQuestionId(question, questionText, container);
+        const isFavorite = this.favorites.some(fav => fav.id === data.id);
+        marker.classList.toggle('favorite', isFavorite);
+
         const questionWrapper = question.closest('.user-query') || question.closest('div[data-testid^="conversation-turn"]') || question;
         let existingStar = questionWrapper.querySelector('.witq-favorite-star');
 
-        if (this.favorites.some(fav => fav.id === questionId)) {
-            marker.classList.add('favorite');
+        if (isFavorite) {
             if (!existingStar) {
                 const star = document.createElement('div');
                 star.className = 'witq-favorite-star';
                 star.textContent = '★';
                 questionWrapper.appendChild(star);
             }
-        } else {
-            marker.classList.remove('favorite');
-            if (existingStar) {
-                existingStar.remove();
-            }
+        } else if (existingStar) {
+            existingStar.remove();
         }
 
-        // Update marker position
-        const questionPosition = window.WITQ.dom.getQuestionPositionInContainer(question, container);
-        const scrollableHeight = (container === window) 
-            ? Math.max(document.documentElement.scrollHeight - window.innerHeight, 1) 
-            : Math.max(container.scrollHeight - container.clientHeight, 1);
-        const clamped = Math.min(Math.max(questionPosition, 0), scrollableHeight);
+        // Update marker position using pre-calculated scrollableHeight
+        const clamped = Math.min(Math.max(data.position, 0), scrollableHeight);
         marker.style.top = `${(clamped / scrollableHeight) * 100}%`;
     }
     
-    getQuestionId(question, questionText, container) {
-        const pos = window.WITQ.dom.getQuestionPositionInContainer(question, container);
-        const textPart = questionText.replace(/<div>/g, ' ').replace(/<\/div>/g, ' ').substring(0, 30);
-        return `${textPart}-${Math.round(pos)}`;
-    }
-
-
     // --- Event Handling & State ---
     
     setupEventListeners() {
@@ -247,43 +260,35 @@ class MarkerManager {
     }
 
     startObserver() {
-        const observerTarget = window.WITQ.dom.getScrollContainer() === window ? document.body : window.WITQ.dom.getScrollContainer();
+        const container = window.WITQ.dom.getScrollContainer();
+        const observerTarget = container === window ? document.body : container;
 
         if (!observerTarget) {
-            setTimeout(() => this.startObserver(), 500); // Retry if target not found
+            setTimeout(() => this.startObserver(), 500);
             return;
         }
 
         this.observer = new MutationObserver((mutations) => {
-            const isRelevantChange = mutations.some(mutation => {
-                if (mutation.type !== 'childList') return false;
-                // Check for added nodes
-                for (const node of mutation.addedNodes) {
-                    if (node.nodeType === 1 && (node.matches(this.config.questionSelector) || node.querySelector(this.config.questionSelector))) {
-                        return true;
-                    }
-                }
-                // Check for removed nodes
-                 for (const node of mutation.removedNodes) {
-                    if (node.nodeType === 1 && (node.matches(this.config.questionSelector) || node.querySelector(this.config.questionSelector))) {
-                        return true;
-                    }
-                }
-                return false;
-            });
+            const isRelevant = mutations.some(m => 
+                m.type === 'childList' && 
+                ([...m.addedNodes, ...m.removedNodes].some(node => 
+                    node.nodeType === 1 && (node.matches(this.config.questionSelector) || node.querySelector(this.config.questionSelector))
+                ))
+            );
 
-            if (isRelevantChange) {
+            if (isRelevant) {
                 clearTimeout(this.debounceTimeout);
-                this.debounceTimeout = setTimeout(() => this.updateMarkers(true), 1200);
+                this.debounceTimeout = setTimeout(() => this.updateMarkers(true), 1000);
             }
         });
 
-        this.observer.observe(observerTarget, {
-            childList: true,
-            subtree: true,
-        });
+        this.observer.observe(observerTarget, { childList: true, subtree: true });
     }
 }
 
-// Global initialization
-setTimeout(() => new MarkerManager(), 2000);
+// Global initialization with a safer delay
+if (document.readyState === 'complete') {
+    new MarkerManager();
+} else {
+    window.addEventListener('load', () => new MarkerManager());
+}

@@ -2,15 +2,16 @@ window.WITQ = window.WITQ || {};
 
 window.WITQ.dom = {
     scrollContainer: null,
+    lastContainerCheck: 0,
 
     getScrollContainer: function() {
-        if (this.scrollContainer && document.body.contains(this.scrollContainer)) {
-             const style = window.getComputedStyle(this.scrollContainer);
-             if ((style.overflowY === 'auto' || style.overflowY === 'scroll')) {
-                return this.scrollContainer;
-             }
+        const now = Date.now();
+        // Use cached container if checked recently (within 2s) and still in DOM
+        if (this.scrollContainer && document.body.contains(this.scrollContainer) && (now - this.lastContainerCheck < 2000)) {
+            return this.scrollContainer;
         }
         
+        this.lastContainerCheck = now;
         const site = window.WITQ.config.site;
         const config = window.WITQ.config.config;
 
@@ -27,8 +28,8 @@ window.WITQ.dom = {
 
         let el = firstQuestion.parentElement;
         while (el && el !== document.body) {
-            const style = window.getComputedStyle(el);
-            if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 10) {
+            const overflow = window.getComputedStyle(el).overflowY;
+            if ((overflow === 'auto' || overflow === 'scroll') && el.scrollHeight > el.clientHeight + 10) {
                 this.scrollContainer = el;
                 return el;
             }
@@ -39,18 +40,15 @@ window.WITQ.dom = {
     },
 
     getQuestionPositionInContainer: function(question, container) {
+        const visibleElement = question.closest('.user-query') || question.closest('div[data-testid^="conversation-turn"]') || question;
+        const rect = visibleElement.getBoundingClientRect();
+
         if (container === window) {
-            const rect = question.getBoundingClientRect();
             return rect.top + window.scrollY;
         }
-        const visibleElement = question.closest('.user-query') || question;
-        let offset = 0;
-        let el = visibleElement;
-        while (el && el !== container) {
-            offset += el.offsetTop;
-            el = el.offsetParent;
-        }
-        return offset;
+        
+        const containerRect = container.getBoundingClientRect();
+        return rect.top - containerRect.top + container.scrollTop;
     },
     
     getScrollOffset: function(scrollContainer) {
