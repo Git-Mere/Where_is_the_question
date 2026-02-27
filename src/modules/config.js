@@ -3,6 +3,7 @@ window.WITQ = window.WITQ || {};
 window.WITQ.config = {
     site: 'unknown',
     config: {},
+    chatgptElementStrategy: null,
 
     initialize: function() {
         this.site = this.getCurrentSite();
@@ -19,21 +20,73 @@ window.WITQ.config = {
     getSiteConfig: function(site) {
         const siteConfigs = {
             chatgpt: {
-                questionSelector: 'div[data-message-author-role="user"]',
+                questionSelector: '[data-message-author-role="user"]',
+                getQuestionElements: () => {
+                    const strategies = {
+                        role: () => Array.from(document.querySelectorAll('[data-message-author-role="user"]')),
+                        nested: () => Array.from(document.querySelectorAll(
+                            '[data-testid^="conversation-turn"] [data-message-author-role="user"], [data-testid^="conversation-turn"] [data-testid="user-message"]'
+                        )),
+                        known: () => Array.from(document.querySelectorAll(
+                            '[data-testid="user-message"], [aria-label*="You said"], [aria-label*="you said"]'
+                        )),
+                        narration: () => Array.from(document.querySelectorAll('[data-testid^="conversation-turn"]'))
+                            .filter(turn => turn.querySelector('[aria-label*="You said"], [aria-label*="you said"]')),
+                        turnFallback: () => Array.from(document.querySelectorAll('[data-testid^="conversation-turn"]'))
+                            .filter(turn => {
+                                if (turn.querySelector('[data-message-author-role="assistant"]')) return false;
+                                return !!(turn.textContent || '').trim();
+                            })
+                    };
+
+                    // Reuse last successful strategy to avoid full-document multi-pass scans on every update.
+                    if (this.chatgptElementStrategy && strategies[this.chatgptElementStrategy]) {
+                        const cachedResult = strategies[this.chatgptElementStrategy]();
+                        if (cachedResult.length > 0) return cachedResult;
+                        this.chatgptElementStrategy = null;
+                    }
+
+                    const order = ['role', 'nested', 'known', 'narration', 'turnFallback'];
+                    for (const key of order) {
+                        const result = strategies[key]();
+                        if (result.length > 0) {
+                            this.chatgptElementStrategy = key;
+                            return result;
+                        }
+                    }
+                    return [];
+                },
                 getQuestionText: (questionElement) => {
-                    const conversationTurn = questionElement.closest('div[data-testid^="conversation-turn"]');
-                    return this.extractQuestionData(conversationTurn || questionElement, 
-                        '.text-base', 
+                    const scopedUserNode =
+                        questionElement.querySelector?.('[data-message-author-role="user"], [data-testid="user-message"], [aria-label*="You said"], [aria-label*="you said"]') ||
+                        questionElement;
+                    const conversationTurn = scopedUserNode.closest('[data-testid^="conversation-turn"]');
+                    return this.extractQuestionData(
+                        scopedUserNode || conversationTurn || questionElement,
+                        '.text-base',
                         ['img[alt]', 'div[data-testid^="file-attachment"] .font-medium'],
                         ['div[data-testid^="file-attachment"]', '.image-upload-item']
                     );
                 }
             },
             gemini: {
-                questionSelector: 'div.query-text',
+                questionSelector: 'div.query-text, .user-query .query-text, .user-query-container .query-text, .query-with-attachments-container .query-text',
+                getQuestionElements: () => {
+                    const primary = Array.from(document.querySelectorAll(
+                        'div.query-text, .user-query .query-text, .user-query-container .query-text, .query-with-attachments-container .query-text'
+                    ));
+                    if (primary.length > 0) return primary;
+
+                    return Array.from(document.querySelectorAll(
+                        '.user-query, .user-query-container, .query-with-attachments-container'
+                    ));
+                },
                 getQuestionText: (questionElement) => {
-                    const userQuery = questionElement.closest('.user-query');
-                    return this.extractQuestionData(userQuery || questionElement, 
+                    const userQuery = questionElement.closest('.user-query') ||
+                                      questionElement.closest('.user-query-container') ||
+                                      questionElement.closest('.query-with-attachments-container');
+                    return this.extractQuestionData(
+                        userQuery || questionElement,
                         '.query-text',
                         ['.file-attachment-card .filename', 'img'],
                         ['.file-attachment-card', '.upload-preview-container']
@@ -41,77 +94,73 @@ window.WITQ.config = {
                 }
             },
             unknown: {
-                questionSelector: 'div[data-message-author-role="user"]',
-                getQuestionText: (questionElement) => questionElement.innerText.trim()
+                questionSelector: '[data-message-author-role="user"]',
+                getQuestionElements: () => Array.from(document.querySelectorAll('[data-message-author-role="user"]')),
+                getQuestionText: (questionElement) => (questionElement.innerText || '').trim()
             }
         };
+
         return siteConfigs[site] || siteConfigs.unknown;
     },
 
     extractQuestionData: function(container, textSelector, fileSelectors, containerSelectorsToRemove) {
         if (!container) return '';
 
-        // 1. Collect file/image information
         let imageUploadCount = 0;
         const fileNames = [];
-        
+
         (fileSelectors || []).forEach(selector => {
             container.querySelectorAll(selector).forEach(fileEl => {
-                let fileName = (fileEl.alt || fileEl.textContent || '').trim();
-                if (fileEl.tagName === 'IMG' && (fileName.toLowerCase() === 'image' || fileName.toLowerCase().startsWith('image:'))) {
+                const raw = (fileEl.alt || fileEl.textContent || '').trim();
+                if (!raw) return;
+
+                if (fileEl.tagName === 'IMG' && (raw.toLowerCase() === 'image' || raw.toLowerCase().startsWith('image:'))) {
                     imageUploadCount++;
-                } else if (fileName) {
-                    if (!fileNames.includes(fileName)) fileNames.push(fileName);
+                    return;
                 }
+
+                if (!fileNames.includes(raw)) fileNames.push(raw);
             });
         });
 
-        // 2. Extract main text efficiently without cloneNode
-        // We'll use a simple recursive function to get text, skipping 'toRemove' elements
         const getCleanText = (node, excludeSelectors) => {
             let text = '';
-            for (let child of node.childNodes) {
+            for (const child of node.childNodes) {
                 if (child.nodeType === Node.TEXT_NODE) {
                     text += child.textContent;
                 } else if (child.nodeType === Node.ELEMENT_NODE) {
-                    const shouldExclude = excludeSelectors.some(sel => child.matches(sel) || child.closest(sel));
-                    if (!shouldExclude) {
-                        text += getCleanText(child, excludeSelectors);
-                    }
+                    const shouldExclude = (excludeSelectors || []).some(sel => child.matches(sel) || child.closest(sel));
+                    if (!shouldExclude) text += getCleanText(child, excludeSelectors);
                 }
             }
             return text;
         };
 
-        const mainText = getCleanText(container, containerSelectorsToRemove || []).trim();
-        
+        const rawMainText = getCleanText(container, containerSelectorsToRemove || []).trim();
+        const mainText = rawMainText.replace(/^(You said)\s*:?\s*/i, '').trim();
+
         const parts = [];
         if (imageUploadCount > 0) {
-            parts.push(imageUploadCount > 1 ? '[업로드된 이미지들]' : '[업로드된 이미지]');
+            parts.push(imageUploadCount > 1 ? '[Uploaded images]' : '[Uploaded image]');
         }
         fileNames.forEach(name => parts.push(`[${name}]`));
 
         const fileString = parts.map(part => `<div>${part}</div>`).join('');
         const mainTextString = mainText ? `<div>${mainText}</div>` : '';
-
         return fileString + mainTextString;
     },
 
     isQuestion: function(text) {
-        if (!text || text.length < 3) return false;
+        if (!text || text.length < 2) return false;
         const cleanText = text.replace(/<[^>]+>/g, ' ').trim();
-        
-        // Match common question marks at the end
-        if (/[?？]$/.test(cleanText)) return true;
+        if (!cleanText) return false;
+
+        if (/\?$/.test(cleanText)) return true;
 
         const lowerText = cleanText.toLowerCase();
-        // Common English question starters
-        const engPrefixes = /^(what|where|when|who|why|how|is|can|could|would|do|does|did|will|should|may|might)\s/i;
-        if (engPrefixes.test(lowerText)) return true;
-
-        // Korean question markers (simple check for endings)
-        const korEndings = /[가까나오죠요]\?*$/;
-        if (korEndings.test(cleanText)) return true;
+        if (/^(what|where|when|who|why|how|is|are|can|could|would|do|does|did|will|should|may|might)\s/.test(lowerText)) {
+            return true;
+        }
 
         return false;
     }
