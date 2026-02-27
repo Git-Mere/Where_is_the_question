@@ -1,4 +1,4 @@
-class MarkerManager {
+﻿class MarkerManager {
     constructor() {
         this.debounceTimeout = null;
         this.updateRafId = null;
@@ -63,6 +63,53 @@ class MarkerManager {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+
+    normalizeFileName(name) {
+        if (!name) return '';
+        const cleaned = String(name)
+            .replace(/^\s*\[[^\]]*icon[^\]]*\]\s*/i, '')
+            .replace(/^\s*\([^\)]*icon[^\)]*\)\s*/i, '')
+            .replace(/^\s*[a-z0-9]+\s*icon\s*/i, '')
+            .trim();
+        if (!cleaned) return '';
+        if (/\.[a-z0-9]{2,8}$/i.test(cleaned)) return cleaned;
+        const maybeExt = cleaned.match(/([a-z0-9]{2,8})$/i);
+        if (maybeExt && cleaned.length > maybeExt[1].length) {
+            return cleaned.replace(/([a-z0-9]{2,8})$/i, '.$1');
+        }
+        return cleaned;
+    }
+
+    buildStructuredTextFromPlain(plain) {
+        if (!plain) return '';
+        const withoutIcons = String(plain)
+            .replace(/\[[^\]]*icon[^\]]*\]/ig, ' ')
+            .replace(/\([^\)]*icon[^\)]*\)/ig, ' ')
+            .trim();
+
+        const splitByYouSaid = withoutIcons.split(/\byou\s*said\b\s*:?\s*/i);
+        if (splitByYouSaid.length >= 2) {
+            const left = this.normalizeFileName(splitByYouSaid[0].trim());
+            const right = splitByYouSaid.slice(1).join(' ').trim();
+            if (left && right) {
+                return `[${this.escapeHtml(left)}]<br>${this.escapeHtml(right)}`;
+            }
+        }
+
+        const removedYouSaid = withoutIcons.replace(/\byou\s*said\b\s*:?\s*/ig, ' ').replace(/\s+/g, ' ').trim();
+        const fileThenQuestion =
+            removedYouSaid.match(/^(.+?\.[a-z0-9]{2,8})\s+(.+)$/i) ||
+            removedYouSaid.match(/^(.+?[a-z0-9]{2,8})(.+)$/i);
+        if (fileThenQuestion) {
+            const fileName = this.normalizeFileName(fileThenQuestion[1]);
+            const question = fileThenQuestion[2].trim();
+            if (fileName && question) {
+                return `[${this.escapeHtml(fileName)}]<br>${this.escapeHtml(question)}`;
+            }
+        }
+
+        return this.escapeHtml(removedYouSaid);
     }
 
     scheduleWarmupUpdates() {
@@ -216,7 +263,7 @@ class MarkerManager {
         if (!cached || Math.abs(cached.position - currentPos) > 1 || cached.index !== index) {
             const plainFallback = (question.innerText || question.textContent || '').trim();
             if (!plainFallback) return null;
-            const fastText = `<div>${this.escapeHtml(plainFallback)}</div>`;
+            const fastText = this.buildStructuredTextFromPlain(plainFallback);
             
             cached = {
                 text: fastText,
@@ -235,9 +282,45 @@ class MarkerManager {
         if (!data || data.detailedText) return data;
         let detailed = this.config.getQuestionText(question);
         const hasRenderableText = !!(detailed && detailed.replace(/<[^>]+>/g, '').trim());
-        if (!hasRenderableText) return data;
+        if (!hasRenderableText) {
+            const plainFallback = (question.innerText || question.textContent || '').trim();
+            if (plainFallback) {
+                detailed = this.buildStructuredTextFromPlain(plainFallback);
+            } else {
+                return data;
+            }
+        }
         data.detailedText = detailed;
         return data;
+    }
+
+    formatTooltipHtml(raw) {
+        if (!raw) return '';
+        let html = String(raw);
+        html = html.replace(/&lt;br\s*\/?&gt;/ig, '<br>');
+        html = html.replace(/<\/div>\s*<div>/ig, '<br>');
+        html = html.replace(/^<div>/i, '').replace(/<\/div>$/i, '');
+
+        // Remove accessibility/icon noise that may still leak from host DOM text.
+        html = html
+            .replace(/\[[^\]]*icon[^\]]*\]\s*/ig, '')
+            .replace(/\([^\)]*icon[^\)]*\)\s*/ig, '')
+            .replace(/\byou\s*said\b\s*:?\s*/ig, ' ')
+            .trim();
+
+        // Ensure a hard line break between file token and question text.
+        if (!/<br\s*\/?>/i.test(html)) {
+            // [file.ext] question...
+            html = html.replace(/(\[[^\]]+\])\s+(.+)/, '$1<br>$2');
+            // file.ext question... (no brackets)
+            html = html.replace(/(\b[^\s<>]+\.[a-z0-9]{2,8}\b)\s+(.+)/i, '$1<br>$2');
+            // file.extQuestion... (no whitespace)
+            html = html.replace(/(\b[^\s<>]+\.[a-z0-9]{2,8}\b)(?=[^\s<])/i, '$1<br>');
+            // [file.ext]Question... (no whitespace)
+            html = html.replace(/(\[[^\]]+\])(?=[^\s<])/, '$1<br>');
+        }
+
+        return html;
     }
 
     generateQuestionId(text, index) {
@@ -264,7 +347,7 @@ class MarkerManager {
             if (!currentData) return;
 
             this.ensureDetailedQuestionText(question, currentData);
-            tooltip.innerHTML = currentData.detailedText || currentData.text;
+            tooltip.innerHTML = this.formatTooltipHtml(currentData.detailedText || currentData.text);
             tooltip.style.visibility = 'visible';
             tooltip.style.opacity = '0';
             
@@ -465,6 +548,7 @@ if (document.readyState === 'complete') {
 } else {
     window.addEventListener('load', () => new MarkerManager());
 }
+
 
 
 

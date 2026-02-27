@@ -1,37 +1,57 @@
-# Project Memory: Where is the question
+﻿# Project Memory: Where is the question
 
 ## 1. Project Overview
-- **Purpose**: A Chrome extension that places markers on the scrollbar for user questions in ChatGPT and Gemini chat histories.
-- **Key Features**:
-    - Click markers to scroll to specific questions.
-    - Right-click markers to favorite questions (adds a '★' icon).
-    - Hover markers to see a tooltip of the question text.
-    - Works across window resizes, session switches, and new chats.
+- Purpose: Chrome extension that marks user questions on the scrollbar in ChatGPT and Gemini.
+- Core UX:
+  - Click marker -> scroll to question.
+  - Right-click marker -> favorite toggle (star + in-message overlay).
+  - Hover marker -> tooltip preview.
+  - Works across SPA route changes, chat switches, and resize.
 
-## 2. Technical Architecture
-- **`manifest.json`**: Extension configuration (currently v1.2).
-- **`content.js`**: Core logic managed by the `MarkerManager` class.
-    - Handles `MutationObserver`, marker creation/updates, and event listeners.
-    - Uses `WeakMap` for performance-optimized data caching.
-- **`src/modules/`**:
-    - **`config.js`**: Site-specific selectors and text extraction.
-        - Aggressively strips accessibility prefixes like "You said", "당신이 말함", etc.
-    - **`dom.js`**: DOM utilities for scroll container detection and coordinate calculation.
-        - Identifies specific chat containers for ChatGPT (`div[role="presentation"]`) and other services.
-    - **`storage.js`**: Wrapper for `chrome.storage.local`.
+## 2. Current Version and Packaging
+- Manifest version: MV3.
+- Extension version: `1.3` (`manifest.json`).
+- Runtime entrypoints:
+  - Content script chain: `src/modules/config.js`, `src/modules/dom.js`, `src/modules/storage.js`, `content.js`
+  - Popup: `popup.html`, `popup.js`, `popup.css`
+  - Locales required by `default_locale`: `_locales/en`, `_locales/ko`
+- Web Store upload zip path used in this repo:
+  - `dist/where_is_the_question_webstore_v1.3.zip`
 
-## 3. Key Technical Standards
-- **Stable ID System**: Question IDs are generated using `(Truncated Text) + (Index)`. This ensures stability during window resizes where pixel positions change.
-- **Positioning Logic**: Uses `(Element Y Position) / (Total Content Height)` to place markers. This allows markers to appear correctly even in short chats or new sessions where no scrollbar is visible yet.
-- **SPA Support**: Monitors `location.href` changes and `popstate` events to reset and rebuild markers when the user switches chat sessions without a full page reload.
-- **Relative Anchoring**: Favorite stars are placed in parent containers with `position: relative` to ensure they stay pinned to the correct message element.
+## 3. Architecture Snapshot
+- `content.js` (`MarkerManager`)
+  - Marker lifecycle management (`Map`), question cache (`WeakMap`), favorites sync.
+  - SPA URL-change handling (`popstate` + patched `history.pushState/replaceState` event).
+  - Update scheduling and throttling via `scheduleUpdate` + `requestAnimationFrame`.
+  - Warm-up updates for first-render race conditions in new sessions.
+- `src/modules/config.js`
+  - Site-specific question selectors/parsers (ChatGPT/Gemini split).
+  - ChatGPT question element strategy cache (`chatgptElementStrategy`) to avoid repeated full-document scans.
+  - Attachment/file name extraction and tooltip text composition.
+- `src/modules/dom.js`
+  - Scroll container detection and position mapping.
+  - Site-specific offsets for scroll targeting.
 
-## 4. Recent Session Updates (Feb 26, 2026)
-- **Aggressive Prefix Removal**: Fixed issue where tooltips showed accessibility labels.
-- **Container Detection**: Explicitly added support for ChatGPT's complex scroll structure to fix navigation (click-to-scroll).
-- **Initialization Timing**: Added staggered updates (1s, 3s after load) to catch late-rendering messages in new chat sessions.
-- **Responsive Handling**: Optimized `MutationObserver` and cache TTL (500ms) to ensure markers update instantly when typing in small window modes.
+## 4. Major Changes in This Session (2026-02-27)
+- Site behavior split strengthened:
+  - ChatGPT and Gemini question detection/collection paths are separately handled to reduce regression ping-pong.
+- Performance-focused refactor:
+  - Coalesced updates with RAF + minimum interval.
+  - Reduced warm-up frequency and added warm-up cancellation once questions are found.
+  - Observer narrowed to active scroll container (avoid broad body-level heavy observation when possible).
+  - Removed repeated favorites storage read on each update path.
+- First-message/new-chat stability improvements:
+  - URL/session switch handling rebuilds markers and re-primes update warm-up.
+- Gemini attachment tooltip cleanup:
+  - Strips accessibility noise and icon tokens (`[... ICON]`, `( ... icon )`, `You said`).
+  - Generalized file-name normalization for multiple extensions, not only PDF.
+  - Tooltip formatter now enforces file/question separation with `<br>` in fallback rendering paths.
+- Note:
+  - Tooltip line-break behavior depends on incoming host DOM text shape; a final formatting pass exists in `content.js` (`formatTooltipHtml`) to force split when possible.
 
-## 5. Deployment Readiness
-- Version 1.2 logic is fully implemented and tested for both major chat platforms.
-- Performance refactoring is complete, minimizing layout thrashing during long conversations.
+## 5. Open Caveats / Next Session Priorities
+- Re-verify Gemini tooltip output for all attachment patterns (`pdf/docx/xlsx/pptx`) using real DOM samples from current production UI.
+- If line breaks still collapse in certain UI variants:
+  - adjust tooltip CSS (`white-space`) and/or
+  - strengthen parser split rule using exact container node boundaries rather than plain-text heuristics.
+- Keep performance budget first: avoid broad `querySelectorAll` fallback chains inside hot update loops unless cached.

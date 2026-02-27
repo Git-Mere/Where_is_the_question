@@ -1,4 +1,4 @@
-window.WITQ = window.WITQ || {};
+﻿window.WITQ = window.WITQ || {};
 
 window.WITQ.config = {
     site: 'unknown',
@@ -88,7 +88,18 @@ window.WITQ.config = {
                     return this.extractQuestionData(
                         userQuery || questionElement,
                         '.query-text',
-                        ['.file-attachment-card .filename', 'img'],
+                        [
+                            '.file-attachment-card .filename',
+                            '.file-attachment-card [data-file-name]',
+                            '.file-attachment-card [title]',
+                            '.file-attachment-chip .filename',
+                            '.query-with-attachments-container [data-file-name]',
+                            '.query-with-attachments-container [title]',
+                            '.query-with-attachments-container [aria-label]',
+                            '.query-with-attachments-container a[href]',
+                            '.query-with-attachments-container button[title]',
+                            'img'
+                        ],
                         ['.file-attachment-card', '.upload-preview-container']
                     );
                 }
@@ -109,9 +120,32 @@ window.WITQ.config = {
         let imageUploadCount = 0;
         const fileNames = [];
 
+        const cleanFileName = (value) => {
+            if (!value) return '';
+            const cleaned = String(value)
+                .replace(/^\s*\[[^\]]*icon[^\]]*\]\s*/i, '')
+                .replace(/^\s*\([^\)]*icon[^\)]*\)\s*/i, '')
+                .replace(/^\s*[a-z0-9]+\s*icon\s*/i, '')
+                .trim();
+            if (!cleaned) return '';
+            if (/\.[a-z0-9]{2,8}$/i.test(cleaned)) return cleaned;
+            const maybeExt = cleaned.match(/([a-z0-9]{2,8})$/i);
+            if (maybeExt && cleaned.length > maybeExt[1].length) {
+                return cleaned.replace(/([a-z0-9]{2,8})$/i, '.$1');
+            }
+            return cleaned;
+        };
+
         (fileSelectors || []).forEach(selector => {
             container.querySelectorAll(selector).forEach(fileEl => {
-                const raw = (fileEl.alt || fileEl.textContent || '').trim();
+                const raw = (
+                    fileEl.getAttribute?.('data-file-name') ||
+                    fileEl.getAttribute?.('title') ||
+                    fileEl.getAttribute?.('aria-label') ||
+                    fileEl.alt ||
+                    fileEl.textContent ||
+                    ''
+                ).trim();
                 if (!raw) return;
 
                 if (fileEl.tagName === 'IMG' && (raw.toLowerCase() === 'image' || raw.toLowerCase().startsWith('image:'))) {
@@ -119,7 +153,9 @@ window.WITQ.config = {
                     return;
                 }
 
-                if (!fileNames.includes(raw)) fileNames.push(raw);
+                const cleaned = cleanFileName(raw);
+                if (!cleaned) return;
+                if (!fileNames.includes(cleaned)) fileNames.push(cleaned);
             });
         });
 
@@ -137,7 +173,10 @@ window.WITQ.config = {
         };
 
         const rawMainText = getCleanText(container, containerSelectorsToRemove || []).trim();
-        const mainText = rawMainText.replace(/^(You said)\s*:?\s*/i, '').trim();
+        const mainText = rawMainText
+            .replace(/\byou\s*said\b\s*:?\s*/ig, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
 
         const parts = [];
         if (imageUploadCount > 0) {
@@ -145,9 +184,19 @@ window.WITQ.config = {
         }
         fileNames.forEach(name => parts.push(`[${name}]`));
 
-        const fileString = parts.map(part => `<div>${part}</div>`).join('');
-        const mainTextString = mainText ? `<div>${mainText}</div>` : '';
-        return fileString + mainTextString;
+        const outputLines = [];
+        if (parts.length > 0) outputLines.push(...parts);
+        if (mainText) outputLines.push(mainText);
+        return outputLines.map(line => this.escapeHtml(line)).join('<br>');
+    },
+
+    escapeHtml: function(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     },
 
     isQuestion: function(text) {
@@ -167,3 +216,4 @@ window.WITQ.config = {
 };
 
 window.WITQ.config.initialize();
+
