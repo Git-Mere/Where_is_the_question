@@ -60,17 +60,18 @@
 }
 
 /* 즐겨찾기된 질문의 컨테이너 */
-div[data-testid^="conversation-turn"], .user-query {
+div[data-testid^="conversation-turn"], .user-query, .user-query-container, .query-with-attachments-container {
     position: relative;
 }
 
 /* 즐겨찾기 별표 */
 .witq-favorite-star {
     position: absolute;
-    top: 20px;
-    left: 0px;
-    font-size: 84px;
+    top: 10px;
+    left: 10px;
+    font-size: 64px;
     color: rgba(255, 238, 0, 0.9);
     z-index: 10;
-    text-shadow: 0 0 4px rgba(0,0,0,0.3);
+    pointer-events: none;
+    text-shadow: 0 0 10px rgba(0,0,0,0.5);
 }

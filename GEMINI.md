@@ -45,5 +45,3 @@ Inhibit your response: only take an action after all the above reasoning is comp
 Basically use Korean
 
 When you delete any file, you must need my permission.
-
-When you use terminal commands, use commands for Windows, not linux or mac
