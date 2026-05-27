@@ -73,6 +73,20 @@ h1 {
     border-bottom: none;
 }
 
+.section-header {
+    font-size: 13px;
+    font-weight: 600;
+    color: #65676b;
+    margin: 8px 0 4px;
+    padding: 0 2px;
+}
+
+#favorites-section {
+    border-bottom: 1px solid #ddd;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+}
+
 .empty-message {
     text-align: center;
     padding: 40px 20px;

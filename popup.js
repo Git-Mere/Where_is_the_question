@@ -7,6 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- DOM Elements ---
     const questionList = document.getElementById('question-list');
+    const favoritesList = document.getElementById('favorites-list');
+    const favoritesSection = document.getElementById('favorites-section');
     const emptyMessage = document.getElementById('empty-message');
 
     let questionsCache = [];
@@ -29,9 +31,62 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
+    // --- UI Helpers ---
+    function createQuestionListItem(item, isFavorite) {
+        const cleanText = item.text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+        const li = document.createElement('li');
+        li.className = 'question-item';
+        li.dataset.questionId = item.id;
+
+        const questionText = document.createElement('span');
+        questionText.className = 'question-text';
+        questionText.textContent = cleanText;
+        questionText.title = cleanText;
+        questionText.addEventListener('click', () => {
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                const activeTab = tabs[0];
+                if (activeTab && activeTab.id) {
+                    chrome.tabs.sendMessage(activeTab.id, {
+                        type: 'scrollToQuestion',
+                        position: item.position
+                    });
+                }
+            });
+            window.close();
+        });
+
+        const star = document.createElement('span');
+        star.className = 'favorite-star';
+        star.textContent = isFavorite ? '★' : '☆';
+        star.addEventListener('click', async () => {
+            if (isFavorite) {
+                favoritesCache = favoritesCache.filter(fav => fav.id !== item.id);
+            } else {
+                favoritesCache.push({ id: item.id, text: item.text, position: item.position });
+            }
+            await saveFavorites(favoritesCache);
+            updatePopupUI();
+        });
+
+        li.appendChild(questionText);
+        li.appendChild(star);
+        return li;
+    }
+
     // --- UI Update ---
     function updatePopupUI() {
-        questionList.innerHTML = ''; // Clear list
+        questionList.innerHTML = '';
+        favoritesList.innerHTML = '';
+
+        const hasFavorites = favoritesCache.length > 0;
+        favoritesSection.style.display = hasFavorites ? 'block' : 'none';
+
+        if (hasFavorites) {
+            favoritesCache.forEach(fav => {
+                favoritesList.appendChild(createQuestionListItem(fav, true));
+            });
+        }
 
         if (!questionsCache || questionsCache.length === 0) {
             emptyMessage.style.display = 'block';
@@ -42,48 +97,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             questionsCache.forEach(question => {
                 const isFavorite = favoritesCache.some(fav => fav.id === question.id);
-
-                const li = document.createElement('li');
-                li.className = 'question-item';
-                li.dataset.questionId = question.id;
-
-                // Strip HTML tags for clean display in the popup list
-                const cleanText = question.text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-
-                const questionText = document.createElement('span');
-                questionText.className = 'question-text';
-                questionText.textContent = cleanText;
-                questionText.title = cleanText;
-                questionText.addEventListener('click', () => {
-                    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                        const activeTab = tabs[0];
-                        if (activeTab && activeTab.id) {
-                            chrome.tabs.sendMessage(activeTab.id, {
-                                type: 'scrollToQuestion',
-                                position: question.position
-                            });
-                        }
-                    });
-                    window.close();
-                });
-
-                const star = document.createElement('span');
-                star.className = 'favorite-star';
-                star.textContent = isFavorite ? '★' : '☆';
-                star.addEventListener('click', async () => {
-                    if (isFavorite) {
-                        favoritesCache = favoritesCache.filter(fav => fav.id !== question.id);
-                        star.textContent = '☆';
-                    } else {
-                        favoritesCache.push(question);
-                        star.textContent = '★';
-                    }
-                    await saveFavorites(favoritesCache);
-                });
-
-                li.appendChild(questionText);
-                li.appendChild(star);
-                questionList.appendChild(li);
+                questionList.appendChild(createQuestionListItem(question, isFavorite));
             });
         }
     }

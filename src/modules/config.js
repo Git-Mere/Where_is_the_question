@@ -120,21 +120,7 @@ window.WITQ.config = {
         let imageUploadCount = 0;
         const fileNames = [];
 
-        const cleanFileName = (value) => {
-            if (!value) return '';
-            const cleaned = String(value)
-                .replace(/^\s*\[[^\]]*icon[^\]]*\]\s*/i, '')
-                .replace(/^\s*\([^\)]*icon[^\)]*\)\s*/i, '')
-                .replace(/^\s*[a-z0-9]+\s*icon\s*/i, '')
-                .trim();
-            if (!cleaned) return '';
-            if (/\.[a-z0-9]{2,8}$/i.test(cleaned)) return cleaned;
-            const maybeExt = cleaned.match(/([a-z0-9]{2,8})$/i);
-            if (maybeExt && cleaned.length > maybeExt[1].length) {
-                return cleaned.replace(/([a-z0-9]{2,8})$/i, '.$1');
-            }
-            return cleaned;
-        };
+        const cleanFileName = window.WITQ.text.normalizeFileName;
 
         (fileSelectors || []).forEach(selector => {
             container.querySelectorAll(selector).forEach(fileEl => {
@@ -173,10 +159,7 @@ window.WITQ.config = {
         };
 
         const rawMainText = getCleanText(container, containerSelectorsToRemove || []).trim();
-        const mainText = rawMainText
-            .replace(/\byou\s*said\b\s*:?\s*/ig, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
+        const mainText = window.WITQ.text.stripYouSaid(rawMainText).replace(/\s+/g, ' ').trim();
 
         const parts = [];
         if (imageUploadCount > 0) {
@@ -187,16 +170,7 @@ window.WITQ.config = {
         const outputLines = [];
         if (parts.length > 0) outputLines.push(...parts);
         if (mainText) outputLines.push(mainText);
-        return outputLines.map(line => this.escapeHtml(line)).join('<br>');
-    },
-
-    escapeHtml: function(text) {
-        return String(text)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+        return outputLines.map(line => window.WITQ.text.escapeHtml(line)).join('<br>');
     },
 
     isQuestion: function(text) {

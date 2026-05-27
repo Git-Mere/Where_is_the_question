@@ -30,5 +30,13 @@
     "contentScriptNotAvailable": {
         "message": "Content script not available. Showing empty message.",
         "description": "Error message for developers in the console."
+    },
+    "favoritesHeader": {
+        "message": "Favorites",
+        "description": "Header for the favorites section in the popup."
+    },
+    "questionsHeader": {
+        "message": "All Questions",
+        "description": "Header for the full question list section in the popup."
     }
 }

@@ -30,5 +30,13 @@
     "contentScriptNotAvailable": {
         "message": "콘텐츠 스크립트를 사용할 수 없습니다. 빈 메시지를 표시합니다.",
         "description": "콘솔에 표시되는 개발자용 오류 메시지입니다."
+    },
+    "favoritesHeader": {
+        "message": "즐겨찾기",
+        "description": "팝업의 즐겨찾기 섹션 헤더입니다."
+    },
+    "questionsHeader": {
+        "message": "전체 질문",
+        "description": "팝업의 전체 질문 목록 섹션 헤더입니다."
     }
 }

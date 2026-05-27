@@ -14,6 +14,7 @@
         this.observer = null;
         this.observerTarget = null;
         this.observerRetryTimer = null;
+        this.observerRetryCount = 0;
         this.markers = new Map(); // Maps questionElement to markerElement
         this.questionDataCache = new WeakMap(); // Cache for parsed question data
         this.lastUrl = location.href;
@@ -56,31 +57,6 @@
         return questionEl;
     }
 
-    escapeHtml(text) {
-        return String(text)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    normalizeFileName(name) {
-        if (!name) return '';
-        const cleaned = String(name)
-            .replace(/^\s*\[[^\]]*icon[^\]]*\]\s*/i, '')
-            .replace(/^\s*\([^\)]*icon[^\)]*\)\s*/i, '')
-            .replace(/^\s*[a-z0-9]+\s*icon\s*/i, '')
-            .trim();
-        if (!cleaned) return '';
-        if (/\.[a-z0-9]{2,8}$/i.test(cleaned)) return cleaned;
-        const maybeExt = cleaned.match(/([a-z0-9]{2,8})$/i);
-        if (maybeExt && cleaned.length > maybeExt[1].length) {
-            return cleaned.replace(/([a-z0-9]{2,8})$/i, '.$1');
-        }
-        return cleaned;
-    }
-
     buildStructuredTextFromPlain(plain) {
         if (!plain) return '';
         const withoutIcons = String(plain)
@@ -90,26 +66,26 @@
 
         const splitByYouSaid = withoutIcons.split(/\byou\s*said\b\s*:?\s*/i);
         if (splitByYouSaid.length >= 2) {
-            const left = this.normalizeFileName(splitByYouSaid[0].trim());
+            const left = window.WITQ.text.normalizeFileName(splitByYouSaid[0].trim());
             const right = splitByYouSaid.slice(1).join(' ').trim();
             if (left && right) {
-                return `[${this.escapeHtml(left)}]<br>${this.escapeHtml(right)}`;
+                return `[${window.WITQ.text.escapeHtml(left)}]<br>${window.WITQ.text.escapeHtml(right)}`;
             }
         }
 
-        const removedYouSaid = withoutIcons.replace(/\byou\s*said\b\s*:?\s*/ig, ' ').replace(/\s+/g, ' ').trim();
+        const removedYouSaid = window.WITQ.text.stripYouSaid(withoutIcons).replace(/\s+/g, ' ').trim();
         const fileThenQuestion =
             removedYouSaid.match(/^(.+?\.[a-z0-9]{2,8})\s+(.+)$/i) ||
             removedYouSaid.match(/^(.+?[a-z0-9]{2,8})(.+)$/i);
         if (fileThenQuestion) {
-            const fileName = this.normalizeFileName(fileThenQuestion[1]);
+            const fileName = window.WITQ.text.normalizeFileName(fileThenQuestion[1]);
             const question = fileThenQuestion[2].trim();
             if (fileName && question) {
-                return `[${this.escapeHtml(fileName)}]<br>${this.escapeHtml(question)}`;
+                return `[${window.WITQ.text.escapeHtml(fileName)}]<br>${window.WITQ.text.escapeHtml(question)}`;
             }
         }
 
-        return this.escapeHtml(removedYouSaid);
+        return window.WITQ.text.escapeHtml(removedYouSaid);
     }
 
     scheduleWarmupUpdates() {
@@ -195,7 +171,7 @@
 
             // 2. Add/Update markers
             questions.forEach((question, index) => {
-                const data = this.getOrUpdateQuestionData(question, container, index);
+                const data = this.getOrUpdateQuestionData(question, container, index, questions);
                 if (!data || !data.text) return;
 
                 let marker = this.markers.get(question);
@@ -234,6 +210,7 @@
             this.scrollbarContainer.style.display = 'none';
         }
         this.markers.clear();
+        this.observerRetryCount = 0;
         window.WITQ.storage.safeSendQuestionList([]);
     }
 
@@ -256,21 +233,21 @@
         this.markers.delete(questionEl);
     }
 
-    getOrUpdateQuestionData(question, container, index) {
+    getOrUpdateQuestionData(question, container, index, allQuestions = null) {
         let cached = this.questionDataCache.get(question);
         const currentPos = window.WITQ.dom.getQuestionPositionInContainer(question, container);
-        
+
         if (!cached || Math.abs(cached.position - currentPos) > 1 || cached.index !== index) {
             const plainFallback = (question.innerText || question.textContent || '').trim();
             if (!plainFallback) return null;
             const fastText = this.buildStructuredTextFromPlain(plainFallback);
-            
+
             cached = {
                 text: fastText,
                 detailedText: null,
                 position: currentPos,
                 index,
-                id: this.generateQuestionId(plainFallback, index),
+                id: this.generateQuestionId(question, plainFallback, allQuestions || this.getQuestions()),
                 isQuestion: window.WITQ.config.isQuestion(plainFallback)
             };
             this.questionDataCache.set(question, cached);
@@ -323,9 +300,16 @@
         return html;
     }
 
-    generateQuestionId(text, index) {
-        const textPart = text.replace(/<[^>]+>/g, ' ').substring(0, 30);
-        return `${textPart}-${index}`;
+    generateQuestionId(question, plainText, allQuestions) {
+        const normalized = window.WITQ.text.normalizePlainText(plainText);
+        const hash = window.WITQ.text.hashString(normalized);
+        let occurrence = 0;
+        for (const q of allQuestions) {
+            if (q === question) break;
+            const qPlain = (q.innerText || q.textContent || '').trim();
+            if (window.WITQ.text.normalizePlainText(qPlain) === normalized) occurrence++;
+        }
+        return occurrence === 0 ? hash : `${hash}-${occurrence}`;
     }
 
     createMarkerElement(question, initialIndex, initialContainer) {
@@ -492,14 +476,29 @@
     startObserver() {
         const container = window.WITQ.dom.getScrollContainer();
         if (container === window) {
-            if (!this.observerRetryTimer) {
-                this.observerRetryTimer = setTimeout(() => {
-                    this.observerRetryTimer = null;
-                    this.startObserver();
-                }, 500);
+            if (this.observerRetryCount < 5) {
+                if (!this.observerRetryTimer) {
+                    this.observerRetryCount++;
+                    this.observerRetryTimer = setTimeout(() => {
+                        this.observerRetryTimer = null;
+                        this.startObserver();
+                    }, 500);
+                }
+                return;
             }
+            // 재시도 상한 도달: document.body 폴백 옵저버 부착
+            if (this.observerTarget === document.body) return;
+            if (this.observer) this.observer.disconnect();
+            this.observerTarget = document.body;
+            this.observer = new MutationObserver(() => {
+                this.scheduleUpdate(false, 120);
+            });
+            this.observer.observe(document.body, { childList: true, subtree: true });
             return;
         }
+
+        // 정상 스크롤 컨테이너: 카운터 초기화 후 옵저버 부착
+        this.observerRetryCount = 0;
         const observerTarget = container;
         if (!observerTarget) return;
 

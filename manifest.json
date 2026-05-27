@@ -31,6 +31,7 @@
         "https://gemini.google.com/*"
       ],
       "js": [
+        "src/modules/text.js",
         "src/modules/config.js",
         "src/modules/dom.js",
         "src/modules/storage.js",
