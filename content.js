@@ -29,6 +29,9 @@ class MarkerManager {
         this.lastViewport = { w: window.innerWidth, h: window.innerHeight };
         this.resizeDebounceTimer = null;
 
+        // 디버그 로그 토글 (사용자 재현 시 수동으로 true)
+        this.debug = false;
+
         this.initialize();
     }
 
@@ -135,6 +138,9 @@ class MarkerManager {
             this.pendingUpdateAfterRun = this.pendingUpdateAfterRun || force;
             return;
         }
+        // 스캔 중에는 마커 갱신 억제(렌더 churn 방지). 스캔 완료 후 scheduleUpdate(true,0)가
+        // 전체 갱신을 하며, 그 setTimeout+rAF 콜백은 finally의 isScanning=false 뒤에 실행되므로 유실 없음.
+        if (this.isScanning) return;
         this.isUpdating = true;
         try {
             // URL 변경 감지 (SPA 대화 전환)
@@ -360,20 +366,27 @@ class MarkerManager {
 
     // --- 스캔 기능 ---
 
-    // DOM 변경이 quietMs 동안 없거나 timeoutMs 초과 시 resolve하는 헬퍼
-    waitForDomSettle(target, quietMs = 150, timeoutMs = 600) {
+    // minWaitMs를 무조건 먼저 대기(사이트가 스크롤에 반응해 렌더 시작할 시간 확보)한 뒤,
+    // DOM 변경이 quietMs 동안 없거나 timeoutMs 초과 시 resolve. mutation을 본 적이 있는지(sawMutation) 반환.
+    async waitForDomSettle(target, quietMs = 200, timeoutMs = 1500, minWaitMs = 150) {
+        // 1. 스크롤 반응 렌더가 시작될 시간 확보
+        await new Promise(r => setTimeout(r, minWaitMs));
+
+        // 2. quiet 감지
         return new Promise((resolve) => {
             let quietTimer = null;
+            let sawMutation = false;
             const observerTarget = (target === window) ? document.body : target;
 
             const finish = () => {
                 observer.disconnect();
                 clearTimeout(quietTimer);
                 clearTimeout(hardTimer);
-                resolve();
+                resolve(sawMutation);
             };
 
             const reset = () => {
+                sawMutation = true;
                 clearTimeout(quietTimer);
                 quietTimer = setTimeout(finish, quietMs);
             };
@@ -434,14 +447,18 @@ class MarkerManager {
 
         // 스캔 중 수집된 질문 데이터 (id -> 최신 측정값)
         const collected = new Map();
+        const scanStart = Date.now();
 
         try {
-            const stepSize = getClientHeight() * 0.6;
             let currentScroll = 0;
+
+            if (this.debug) {
+                console.log('[WITQ] scan start', { convKey, totalHeight: getScrollHeight() });
+            }
 
             // 최상단부터 시작
             setScrollTop(0);
-            await this.waitForDomSettle(container);
+            await this.waitForDomSettle(container, 200, 1500, 150);
 
             while (true) {
                 // 대화 전환 감지: 스캔 중단 (정리는 finally가 처리)
@@ -452,6 +469,8 @@ class MarkerManager {
                 const questions = this.getQuestions();
                 const allQuestionsSnapshot = questions; // ID 계산에 사용
 
+                let stepCount = 0;
+                let maxSeenTop = 0; // 이번 스텝에서 본 질문들의 최대 position (적응형 스텝용)
                 for (const el of questions) {
                     const plain = (el.innerText || el.textContent || '').trim();
                     if (!plain) continue;
@@ -463,6 +482,12 @@ class MarkerManager {
 
                     // 이미 본 ID는 위치 값을 최신으로 덮어씀 (더 정확한 측정값)
                     collected.set(id, { id, text, position, isQuestion });
+                    stepCount++;
+                    if (position > maxSeenTop) maxSeenTop = position;
+                }
+
+                if (this.debug) {
+                    console.log('[WITQ] scan step', { currentScroll, stepCount, total: collected.size });
                 }
 
                 const scrollHeight = getScrollHeight();
@@ -471,9 +496,18 @@ class MarkerManager {
                 // 하단 도달 판별
                 if (currentScroll + clientHeight >= scrollHeight - 1) break;
 
-                currentScroll = Math.min(currentScroll + stepSize, scrollHeight - clientHeight);
+                // 적응형 스텝: 최소 전진(0.8뷰포트) 보장 + 렌더 창 끝 직전(0.5뷰포트 겹침).
+                // max(minNext, windowNext)이므로 항상 minNext 이상 → 단조 증가 보장. 하단으로 clamp.
+                const minNext = currentScroll + clientHeight * 0.8;
+                const windowNext = maxSeenTop - clientHeight * 0.5;
+                currentScroll = Math.min(Math.max(minNext, windowNext), scrollHeight - clientHeight);
+
                 setScrollTop(currentScroll);
-                await this.waitForDomSettle(container);
+                const sawMutation = await this.waitForDomSettle(container, 200, 1500, 150);
+                // 늦은 렌더 대비: mutation을 못 봤으면 스텝당 1회만 추가 대기
+                if (!sawMutation) {
+                    await this.waitForDomSettle(container, 200, 1000, 150);
+                }
             }
 
             // 대화 전환 최종 확인 (정리는 finally가 처리)
@@ -486,6 +520,10 @@ class MarkerManager {
                 .sort((a, b) => a.position - b.position);
             window.WITQ.storage.setScanCache(convKey, sortedList);
             this.scannedKeys.add(convKey);
+
+            if (this.debug) {
+                console.log('[WITQ] scan done', { questions: sortedList.length, ms: Date.now() - scanStart });
+            }
 
             // 마커 즉시 갱신
             this.scheduleUpdate(true, 0);
@@ -520,7 +558,11 @@ class MarkerManager {
 
         const maxAttempts = 8;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            await this.waitForDomSettle(container, 100, 400);
+            const sawMutation = await this.waitForDomSettle(container, 150, 800, 120);
+            // 늦은 렌더 대비: mutation을 못 봤으면 이 시도에서 1회만 추가 대기
+            if (!sawMutation) {
+                await this.waitForDomSettle(container, 150, 600, 120);
+            }
 
             // 대화 전환 감지 시 중단
             if (window.WITQ.storage.getConversationKey() !== convKey) return;
