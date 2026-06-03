@@ -102,7 +102,7 @@ class MarkerManager {
 
     scheduleWarmupUpdates() {
         this.cancelWarmupUpdates();
-        [180, 900].forEach(delay => {
+        [180, 900, 2000, 4000].forEach(delay => {
             const timerId = setTimeout(() => this.scheduleUpdate(true, 0), delay);
             this.warmupTimers.push(timerId);
         });
@@ -186,6 +186,8 @@ class MarkerManager {
             for (const [id, liveEntry] of liveById) {
                 unionById.set(id, liveEntry);
             }
+
+            if (this.debug) console.log('[WITQ] update', { live: liveDomQuestions.length, cached: cached.length, union: unionById.size, container: container === window ? 'window' : 'element', totalHeight });
 
             if (unionById.size === 0) {
                 if (this.markers.size === 0) {
@@ -794,6 +796,8 @@ class MarkerManager {
                 this.scheduleUpdate(false, 120);
             });
             this.observer.observe(document.body, { childList: true, subtree: true });
+            // 부착 전 렌더된 내용이 반영되도록 부착 직후 1회 강제 갱신
+            this.scheduleUpdate(true, 0);
             return;
         }
 
@@ -818,6 +822,8 @@ class MarkerManager {
             childList: true,
             subtree: true
         });
+        // 부착 전 렌더된 내용이 반영되도록 부착 직후 1회 강제 갱신
+        this.scheduleUpdate(true, 0);
     }
 }
 
@@ -841,9 +847,9 @@ if (!window.__WITQ_HISTORY_HOOKED__) {
     };
 }
 
-// 안전한 지연 초기화
+// 안전한 지연 초기화 (인스턴스를 노출해 DevTools에서 __witqMM.debug = true 가능)
 if (document.readyState === 'complete') {
-    new MarkerManager();
+    window.__witqMM = new MarkerManager();
 } else {
-    window.addEventListener('load', () => new MarkerManager());
+    window.addEventListener('load', () => { window.__witqMM = new MarkerManager(); });
 }
