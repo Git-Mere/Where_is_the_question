@@ -537,9 +537,11 @@ class MarkerManager {
                 if (currentScroll + clientHeight >= scrollHeight - 1) break;
 
                 // 적응형 스텝: 최소 전진(0.8뷰포트) 보장 + 렌더 창 끝 직전(0.5뷰포트 겹침).
+                // windowNext에 전진 상한(2.5뷰포트)을 둬서, 반대편 끝에 잔존한 렌더 창으로 인해
+                // maxSeenTop이 오판될 때 한 번에 멀리 점프해 중간 질문을 건너뛰는 폭주를 방지한다.
                 // max(minNext, windowNext)이므로 항상 minNext 이상 → 단조 증가 보장. 하단으로 clamp.
                 const minNext = currentScroll + clientHeight * 0.8;
-                const windowNext = maxSeenTop - clientHeight * 0.5;
+                const windowNext = Math.min(maxSeenTop - clientHeight * 0.5, currentScroll + clientHeight * 2.5);
                 currentScroll = Math.min(Math.max(minNext, windowNext), scrollHeight - clientHeight);
 
                 setScrollTop(currentScroll);

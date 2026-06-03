@@ -55,11 +55,20 @@ window.WITQ.dom = {
         }
 
         if (site === 'chatgpt') {
-            // ChatGPT UI variants: class names and wrappers may differ across deployments.
-            const chatContainer = document.querySelector('div[role="presentation"] .flex-col.flex-1.overflow-y-auto') || 
+            // 1순위: 질문을 실제로 포함하는 스크롤 조상 (컨테이너 오판 방지)
+            if (firstQuestion) {
+                const ancestor = this.findScrollableAncestor(firstQuestion);
+                if (ancestor) {
+                    this.scrollContainer = ancestor;
+                    return ancestor;
+                }
+            }
+            // 폴백: 알려진 셀렉터 (단, 실제 스크롤 가능 + 질문 포함 검증)
+            const chatContainer = document.querySelector('div[role="presentation"] .flex-col.flex-1.overflow-y-auto') ||
                                   document.querySelector('div[role="presentation"] .overflow-y-auto') ||
                                   document.querySelector('main div.overflow-y-auto');
-            if (chatContainer) {
+            if (chatContainer && this.isScrollableElement(chatContainer) &&
+                (!firstQuestion || chatContainer.contains(firstQuestion))) {
                 this.scrollContainer = chatContainer;
                 return chatContainer;
             }
