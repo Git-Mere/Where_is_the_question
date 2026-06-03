@@ -32,10 +32,22 @@ class MarkerManager {
         // 디버그 로그 토글 (사용자 재현 시 수동으로 true)
         this.debug = false;
 
+        // 고아 인스턴스 방지: 새 스크립트가 teardown 이벤트를 쏘면 이전 인스턴스 정리.
+        // 이 인스턴스도 이후 teardown을 수신하면 스스로 정리한다.
+        this.destroyed = false;
+        window.dispatchEvent(new Event('witq:teardown'));
+        window.addEventListener('witq:teardown', () => this.destroy(), { once: true });
+
         this.initialize();
     }
 
     async initialize() {
+        // 디버그 플래그 영속화: 자동 스캔/첫 갱신 전에 먼저 반영
+        try {
+            const r = await chrome.storage.local.get('witqDebug');
+            if (r && r.witqDebug) this.debug = true;
+        } catch (e) {}
+
         try {
             this.favorites = await window.WITQ.storage.getFavorites();
             this.scheduleUpdate(true, 0);
@@ -44,6 +56,19 @@ class MarkerManager {
 
         this.setupEventListeners();
         this.startObserver();
+    }
+
+    destroy() {
+        this.destroyed = true;
+        if (this.observer) this.observer.disconnect();
+        clearTimeout(this.debounceTimeout);
+        clearTimeout(this.observerRetryTimer);
+        clearTimeout(this.resizeDebounceTimer);
+        this.cancelWarmupUpdates();
+        if (this.updateRafId !== null) {
+            cancelAnimationFrame(this.updateRafId);
+            this.updateRafId = null;
+        }
     }
 
     // --- Marker Management ---
@@ -114,6 +139,7 @@ class MarkerManager {
     }
 
     scheduleUpdate(force = false, delay = 0) {
+        if (this.destroyed) return;
         this.pendingForceUpdate = this.pendingForceUpdate || force;
         clearTimeout(this.debounceTimeout);
         this.debounceTimeout = setTimeout(() => {
@@ -134,22 +160,25 @@ class MarkerManager {
     }
 
     async updateMarkers(force = false) {
+        if (this.destroyed) return;
         if (this.isUpdating) {
             this.pendingUpdateAfterRun = this.pendingUpdateAfterRun || force;
             return;
         }
-        // 스캔 중에는 마커 갱신 억제(렌더 churn 방지). 스캔 완료 후 scheduleUpdate(true,0)가
-        // 전체 갱신을 하며, 그 setTimeout+rAF 콜백은 finally의 isScanning=false 뒤에 실행되므로 유실 없음.
-        if (this.isScanning) return;
         this.isUpdating = true;
         try {
-            // URL 변경 감지 (SPA 대화 전환)
+            // URL 변경 감지 (SPA 대화 전환). 스캔 중이라도 잔존 마커를 즉시 비우기 위해
+            // isScanning 가드보다 먼저 처리한다.
             if (this.lastUrl !== location.href) {
                 this.lastUrl = location.href;
                 this.resetMarkers();
                 this.scheduleWarmupUpdates();
                 this.startObserver();
             }
+
+            // 스캔 중에는 마커 갱신 억제(렌더 churn 방지). 스캔 완료 후 scheduleUpdate(true,0)가
+            // 전체 갱신을 하며, 그 setTimeout+rAF 콜백은 finally의 isScanning=false 뒤에 실행되므로 유실 없음.
+            if (this.isScanning) return;
 
             const liveDomQuestions = this.getQuestions();
 
@@ -247,6 +276,12 @@ class MarkerManager {
                     position: entryData.position,
                     isQuestion: entryData.isQuestion
                 });
+            }
+
+            // 방어적 청소: this.markers에 속하지 않은 잔존 자식 요소 제거
+            const known = new Set(Array.from(this.markers.values(), e => e.marker));
+            for (const child of Array.from(this.scrollbarContainer.children)) {
+                if (!known.has(child)) child.remove();
             }
 
             // 팝업에 전체 목록 전송 (캐시 포함)
@@ -450,6 +485,8 @@ class MarkerManager {
         // 스캔 중 수집된 질문 데이터 (id -> 최신 측정값)
         const collected = new Map();
         const scanStart = Date.now();
+        // 대화 전환/teardown으로 중단된 경우: 다른 대화에 이전 스크롤 복원 금지
+        let abortedByNav = false;
 
         try {
             let currentScroll = 0;
@@ -463,8 +500,9 @@ class MarkerManager {
             await this.waitForDomSettle(container, 200, 1500, 150);
 
             while (true) {
-                // 대화 전환 감지: 스캔 중단 (정리는 finally가 처리)
-                if (window.WITQ.storage.getConversationKey() !== convKey) {
+                // 대화 전환/teardown 감지: 스캔 중단 (정리는 finally가 처리)
+                if (this.destroyed || window.WITQ.storage.getConversationKey() !== convKey) {
+                    abortedByNav = true;
                     return;
                 }
 
@@ -512,8 +550,9 @@ class MarkerManager {
                 }
             }
 
-            // 대화 전환 최종 확인 (정리는 finally가 처리)
-            if (window.WITQ.storage.getConversationKey() !== convKey) {
+            // 대화 전환/teardown 최종 확인 (정리는 finally가 처리)
+            if (this.destroyed || window.WITQ.storage.getConversationKey() !== convKey) {
+                abortedByNav = true;
                 return;
             }
 
@@ -533,9 +572,12 @@ class MarkerManager {
             // 영구적 에러 시 세션당 대화별 1회만 시도하도록 스캔 완료로 표시
             this.scannedKeys.add(convKey);
         } finally {
-            setScrollTop(originalScrollTop);
+            // 중단된 경우 다른 대화/제거된 인스턴스에 이전 스크롤을 복원하지 않는다
+            if (!abortedByNav) setScrollTop(originalScrollTop);
             this._hideScanIndicator();
             this.isScanning = false;
+            // 대화 전환으로 중단됐다면 새 페이지 마커 생성을 보장
+            if (abortedByNav) this.scheduleUpdate(true, 0);
         }
     }
 
