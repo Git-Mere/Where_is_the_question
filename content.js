@@ -190,7 +190,12 @@ class MarkerManager {
                 : Math.max(container.scrollHeight, container.clientHeight, 1);
 
             const convKey = window.WITQ.storage.getConversationKey();
-            const cached = window.WITQ.storage.getScanCache(convKey) || [];
+            const cacheEntry = window.WITQ.storage.getScanCache(convKey);
+            const cached = cacheEntry ? cacheEntry.questions : [];
+            const scanHeight = cacheEntry ? cacheEntry.scanHeight : 0;
+            // 마커 % 분모: 스캔 좌표계와 현재 높이 중 큰 값. 재진입 시 현재 높이가 작아도
+            // scanHeight로 고정돼 마커가 흔들리지 않고, 새 질문으로 더 커지면 현재 높이를 따른다.
+            const effHeight = Math.max(scanHeight, totalHeight);
 
             // 캐시 엔트리를 id 기반 Map으로 변환 (O(1) 조회용)
             const cachedById = new Map();
@@ -198,25 +203,35 @@ class MarkerManager {
                 cachedById.set(entry.id, entry);
             }
 
+            // 라이브 측정값으로 캐시 position을 덮어쓸지 여부: 현재 높이가 스캔 좌표계와
+            // 충분히 일치할 때만 허용 (축소된 가상화 상태에서 캐시 오염 방지)
+            const allowCacheOverwrite = !scanHeight ||
+                Math.abs(totalHeight - scanHeight) / scanHeight < 0.1;
+
             // 현재 DOM에 있는 질문의 id 기반 데이터 맵
             const liveById = new Map();
             liveDomQuestions.forEach((question, index) => {
                 const data = this.getOrUpdateQuestionData(question, container, index, liveDomQuestions);
                 if (!data || !data.text) return;
                 liveById.set(data.id, { ...data, element: question });
-                // 캐시에도 위치 갱신 (라이브 측정값이 더 정확)
-                if (cachedById.has(data.id)) {
+                // 캐시 position 갱신 (좌표계가 일치할 때만 — 라이브 측정값이 더 정확)
+                if (allowCacheOverwrite && cachedById.has(data.id)) {
                     cachedById.get(data.id).position = data.position;
                 }
             });
 
-            // 합집합 구성: 캐시 + 라이브
+            // 합집합 구성: 캐시 + 라이브. 좌표계 불일치 시 표시 position은 캐시(스캔 좌표계)를 유지
             const unionById = new Map(cachedById);
             for (const [id, liveEntry] of liveById) {
-                unionById.set(id, liveEntry);
+                const cachedEntry = cachedById.get(id);
+                if (cachedEntry && !allowCacheOverwrite) {
+                    unionById.set(id, { ...liveEntry, position: cachedEntry.position });
+                } else {
+                    unionById.set(id, liveEntry);
+                }
             }
 
-            if (this.debug) console.log('[WITQ] update', { live: liveDomQuestions.length, cached: cached.length, union: unionById.size, container: container === window ? 'window' : 'element', totalHeight });
+            if (this.debug) console.log('[WITQ] update', { live: liveDomQuestions.length, cached: cached.length, union: unionById.size, container: container === window ? 'window' : 'element', totalHeight, scanHeight, effHeight });
 
             if (unionById.size === 0) {
                 if (this.markers.size === 0) {
@@ -257,7 +272,7 @@ class MarkerManager {
 
                 let existing = this.markers.get(id);
                 if (!existing) {
-                    const marker = this.createMarkerElement(id, liveEl, entryData);
+                    const marker = this.createMarkerElement(id, liveEl, entryData, container, effHeight);
                     this.scrollbarContainer.appendChild(marker);
                     existing = { marker, element: liveEl, position: entryData.position, text: entryData.text, isQuestion: entryData.isQuestion };
                     this.markers.set(id, existing);
@@ -267,7 +282,7 @@ class MarkerManager {
                     existing.position = entryData.position;
                     existing.text = entryData.text;
                     existing.isQuestion = entryData.isQuestion;
-                    this.updateMarkerElement(existing.marker, liveEl, entryData, container, totalHeight);
+                    this.updateMarkerElement(existing.marker, liveEl, entryData, container, effHeight);
                 }
 
                 questionsForPopup.push({
@@ -558,14 +573,17 @@ class MarkerManager {
                 return;
             }
 
-            // 위치 오름차순 정렬 후 캐시 저장
+            // 스캔 완료 시점의 전체 높이 캡처 (마커 % 좌표계 기준). 복원 전에 측정한다.
+            const scanHeight = getScrollHeight();
+
+            // 위치 오름차순 정렬 후 캐시 저장 (좌표계 기준 scanHeight 동봉)
             const sortedList = Array.from(collected.values())
                 .sort((a, b) => a.position - b.position);
-            window.WITQ.storage.setScanCache(convKey, sortedList);
+            window.WITQ.storage.setScanCache(convKey, { questions: sortedList, scanHeight });
             this.scannedKeys.add(convKey);
 
             if (this.debug) {
-                console.log('[WITQ] scan done', { questions: sortedList.length, ms: Date.now() - scanStart });
+                console.log('[WITQ] scan done', { questions: sortedList.length, scanHeight, ms: Date.now() - scanStart });
             }
 
             // 마커 즉시 갱신
@@ -583,24 +601,56 @@ class MarkerManager {
         }
     }
 
-    // 마커 클릭 시 2단계 이동: 캐시 위치로 즉시 점프 후 실제 요소 렌더를 기다려 정확히 보정
+    // 착지 보정 루프: 점프 후 DOM이 안정될 때까지 기다리며 실제 요소 위치로 미세 보정.
+    // 긴 페이지에서 가상화 렌더로 높이가 출렁여 목표를 지나치는 문제를 잡는다.
+    async _settleAndCorrect(el, container, maxIter = 3) {
+        for (let i = 0; i < maxIter; i++) {
+            await this.waitForDomSettle(container, 150, 600, 120);
+            if (!el || !document.body.contains(el)) return;
+            const pos = window.WITQ.dom.getQuestionPositionInContainer(el, container);
+            const offset = window.WITQ.dom.getScrollOffset(container);
+            const target = Math.max(pos - offset, 0);
+            const cur = (container === window) ? window.scrollY : container.scrollTop;
+            if (Math.abs(cur - target) <= 4) return;
+            window.WITQ.dom.scrollToQuestionPosition(pos, container, 'auto');
+        }
+    }
+
+    // 마커 클릭 시 이동: 긴 페이지는 즉시 점프(auto)로 통일하고 착지 보정,
+    // 짧은 페이지는 기존 smooth 유지.
     async navigateToQuestion(id) {
         const entry = this.markers.get(id);
         if (!entry) return;
 
         const container = window.WITQ.dom.getScrollContainer();
+        const isWindow = container === window;
+        const currentHeight = isWindow ? document.documentElement.scrollHeight : container.scrollHeight;
+        const viewport = isWindow ? window.innerHeight : container.clientHeight;
+        const convKey = window.WITQ.storage.getConversationKey();
+        const cacheEntry = window.WITQ.storage.getScanCache(convKey);
+        const scanHeight = cacheEntry ? cacheEntry.scanHeight : 0;
+        // 스캔 캐시가 있거나 현재 높이가 충분히 길면 긴 페이지로 간주 → 즉시 점프
+        const isLong = !!cacheEntry || currentHeight > viewport * 3;
+        const behavior = isLong ? 'auto' : 'smooth';
 
-        // 케이스 1: 이미 렌더된 요소면 실제 위치 재측정 후 smooth 한 번으로 끝
+        // 케이스 1: 이미 렌더된 요소면 실제 위치 재측정 후 이동
         if (entry.element && document.body.contains(entry.element)) {
             const pos = window.WITQ.dom.getQuestionPositionInContainer(entry.element, container);
             entry.position = pos;
-            window.WITQ.dom.scrollToQuestionPosition(pos, container, 'smooth');
+            window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
+            if (isLong) {
+                await this._settleAndCorrect(entry.element, container);
+                // 보정 후 마지막 실측값으로 갱신
+                if (document.body.contains(entry.element)) {
+                    entry.position = window.WITQ.dom.getQuestionPositionInContainer(entry.element, container);
+                }
+            }
             return;
         }
 
-        // 케이스 2: 캐시만 있음 — 어림 위치로 즉시 점프 후 렌더 대기/탐색
-        const convKey = window.WITQ.storage.getConversationKey();
-        window.WITQ.dom.scrollToQuestionPosition(entry.position, container, 'auto');
+        // 케이스 2: 캐시만 있음 — 좌표계 스케일링한 어림 위치로 즉시 점프 후 렌더 대기/탐색
+        const jumpPos = scanHeight ? entry.position * (currentHeight / scanHeight) : entry.position;
+        window.WITQ.dom.scrollToQuestionPosition(jumpPos, container, 'auto');
 
         const maxAttempts = 8;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -630,13 +680,19 @@ class MarkerManager {
                 entry.position = pos;
                 const cachedData = this.questionDataCache.get(found);
                 if (cachedData) cachedData.position = pos;
-                window.WITQ.dom.scrollToQuestionPosition(pos, container, 'smooth');
+                window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
+                if (isLong) {
+                    await this._settleAndCorrect(found, container);
+                    if (document.body.contains(found)) {
+                        entry.position = window.WITQ.dom.getQuestionPositionInContainer(found, container);
+                    }
+                }
                 return;
             }
 
             // 못 찾았고 시도 남았으면 어림 위치 재고정 (높이 변동으로 밀렸을 수 있음)
             if (attempt < maxAttempts - 1) {
-                window.WITQ.dom.scrollToQuestionPosition(entry.position, container, 'auto');
+                window.WITQ.dom.scrollToQuestionPosition(jumpPos, container, 'auto');
             }
         }
         // 끝까지 못 찾으면 어림 위치에 머문 채 종료 (무음)
@@ -644,8 +700,8 @@ class MarkerManager {
 
     // --- 마커 DOM 생성/갱신 ---
 
-    // id와 현재 라이브 요소(null 가능), 초기 데이터를 받아 마커 DOM 생성
-    createMarkerElement(id, initialElement, initialData) {
+    // id와 현재 라이브 요소(null 가능), 초기 데이터, 컨테이너/effHeight(% 분모)를 받아 마커 DOM 생성
+    createMarkerElement(id, initialElement, initialData, container, effHeight) {
         const marker = document.createElement('div');
         marker.className = 'question-marker';
 
@@ -725,14 +781,9 @@ class MarkerManager {
             this.scheduleUpdate(true, 60);
         });
 
-        // 초기 위치/상태 설정
-        const container = window.WITQ.dom.getScrollContainer();
-        const totalHeight = (container === window)
-            ? Math.max(document.documentElement.scrollHeight, window.innerHeight, 1)
-            : Math.max(container.scrollHeight, container.clientHeight, 1);
-
+        // 초기 위치/상태 설정 (분모는 호출부에서 전달한 effHeight 사용)
         if (initialData) {
-            this.updateMarkerElement(marker, initialElement, initialData, container, totalHeight);
+            this.updateMarkerElement(marker, initialElement, initialData, container, effHeight);
         }
         return marker;
     }
