@@ -49,7 +49,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (activeTab && activeTab.id) {
                     chrome.tabs.sendMessage(activeTab.id, {
                         type: 'scrollToQuestion',
-                        position: item.position
+                        position: item.position,
+                        id: item.id
                     });
                 }
             });

@@ -64,6 +64,20 @@ div[data-testid^="conversation-turn"], .user-query, .user-query-container, .quer
     position: relative;
 }
 
+/* 전체 스캔 중 표시 배지 */
+#witq-scan-indicator {
+    position: fixed;
+    top: 8px;
+    right: 20px;
+    padding: 3px 8px;
+    background-color: rgba(0, 0, 0, 0.55);
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 11px;
+    border-radius: 4px;
+    z-index: 10001;
+    pointer-events: none;
+}
+
 /* 즐겨찾기 별표 */
 .witq-favorite-star {
     position: absolute;

@@ -105,13 +105,13 @@ window.WITQ.dom = {
         return 12;
     },
 
-    scrollToQuestionPosition: function(rawPosition, scrollContainerOverride = null) {
+    scrollToQuestionPosition: function(rawPosition, scrollContainerOverride = null, behavior = 'smooth') {
         const container = scrollContainerOverride || this.getScrollContainer();
         const offset = this.getScrollOffset(container);
         const target = Math.max(rawPosition - offset, 0);
 
         if (typeof container.scrollTo === 'function') {
-            container.scrollTo({ top: target, behavior: 'smooth' });
+            container.scrollTo({ top: target, behavior });
         } else {
             container.scrollTop = target;
         }
