@@ -624,32 +624,58 @@ class MarkerManager {
 
         const container = window.WITQ.dom.getScrollContainer();
         const isWindow = container === window;
-        const currentHeight = isWindow ? document.documentElement.scrollHeight : container.scrollHeight;
         const viewport = isWindow ? window.innerHeight : container.clientHeight;
         const convKey = window.WITQ.storage.getConversationKey();
         const cacheEntry = window.WITQ.storage.getScanCache(convKey);
         const scanHeight = cacheEntry ? cacheEntry.scanHeight : 0;
-        // 스캔 캐시가 있거나 현재 높이가 충분히 길면 긴 페이지로 간주 → 즉시 점프
-        const isLong = !!cacheEntry || currentHeight > viewport * 3;
-        const behavior = isLong ? 'auto' : 'smooth';
 
-        // 케이스 1: 이미 렌더된 요소면 실제 위치 재측정 후 이동
-        if (entry.element && document.body.contains(entry.element)) {
-            const pos = window.WITQ.dom.getQuestionPositionInContainer(entry.element, container);
-            entry.position = pos;
-            window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
-            if (isLong) {
-                await this._settleAndCorrect(entry.element, container);
-                // 보정 후 마지막 실측값으로 갱신
-                if (document.body.contains(entry.element)) {
-                    entry.position = window.WITQ.dom.getQuestionPositionInContainer(entry.element, container);
-                }
-            }
-            return;
+        // 스캔 캐시에서 스케일링 기준 position을 직접 읽어 좌표계 오염 방지.
+        // 캐시에 해당 id 항목이 없으면 entry.position으로 폴백.
+        let basePosition = entry.position;
+        if (cacheEntry && cacheEntry.questions) {
+            const cacheQuestion = cacheEntry.questions.find(q => q.id === id);
+            if (cacheQuestion) basePosition = cacheQuestion.position;
         }
 
-        // 케이스 2: 캐시만 있음 — 좌표계 스케일링한 어림 위치로 즉시 점프 후 렌더 대기/탐색
-        const jumpPos = scanHeight ? entry.position * (currentHeight / scanHeight) : entry.position;
+        // id의 해시부 (순번 접미사 제거): 매칭에 사용
+        const expectedHash = String(id).split('-')[0];
+
+        // 스캔 캐시가 있거나 현재 높이가 충분히 길면 긴 페이지로 간주 → 즉시 점프
+        const currentHeightNow = isWindow ? document.documentElement.scrollHeight : container.scrollHeight;
+        const isLong = !!cacheEntry || currentHeightNow > viewport * 3;
+        const behavior = isLong ? 'auto' : 'smooth';
+
+        // 케이스 1: 이미 렌더된 요소면 실제 위치 재측정 후 이동.
+        // stale 요소 검증: 요소 텍스트 해시가 id 해시부와 일치해야 신뢰.
+        if (entry.element && document.body.contains(entry.element)) {
+            const elPlain = (entry.element.innerText || entry.element.textContent || '').trim();
+            const elHash = elPlain
+                ? String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(elPlain)))
+                : null;
+            if (elHash && elHash === expectedHash) {
+                const pos = window.WITQ.dom.getQuestionPositionInContainer(entry.element, container);
+                entry.position = pos;
+                window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
+                if (isLong) {
+                    await this._settleAndCorrect(entry.element, container);
+                    // 보정 후 마지막 실측값으로 갱신
+                    if (document.body.contains(entry.element)) {
+                        entry.position = window.WITQ.dom.getQuestionPositionInContainer(entry.element, container);
+                    }
+                }
+                return;
+            }
+            // 해시 불일치: stale 요소로 간주하고 케이스 2로 진행
+        }
+
+        // 케이스 2: 캐시만 있음 — 좌표계 스케일링한 어림 위치로 즉시 점프 후 렌더 대기/탐색.
+        // 매 시도마다 현재 scrollHeight를 재측정해 jumpPos를 갱신(높이가 계속 자라는 상황 대응).
+        const computeJumpPos = () => {
+            const liveHeight = isWindow ? document.documentElement.scrollHeight : container.scrollHeight;
+            return scanHeight ? basePosition * (liveHeight / scanHeight) : basePosition;
+        };
+
+        let jumpPos = computeJumpPos();
         window.WITQ.dom.scrollToQuestionPosition(jumpPos, container, 'auto');
 
         const maxAttempts = 8;
@@ -663,21 +689,43 @@ class MarkerManager {
             // 대화 전환 감지 시 중단
             if (window.WITQ.storage.getConversationKey() !== convKey) return;
 
+            // 루프마다 높이 재측정 후 jumpPos 갱신
+            jumpPos = computeJumpPos();
+
             const questions = this.getQuestions();
-            let found = null;
+            // 해시 일치 후보를 모아서 예상 위치에 가장 가까운 요소를 선택.
+            // 중복 텍스트(같은 해시) 상황에서 순번 기반 매칭 대신 위치 근접도로 선별.
+            const candidates = [];
             for (const el of questions) {
                 const plain = (el.innerText || el.textContent || '').trim();
                 if (!plain) continue;
-                if (this.generateQuestionId(el, plain, questions) === id) {
-                    found = el;
-                    break;
+                const elHash = String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(plain)));
+                if (elHash === expectedHash) {
+                    candidates.push(el);
+                }
+            }
+
+            let found = null;
+            if (candidates.length === 1) {
+                found = candidates[0];
+            } else if (candidates.length > 1) {
+                // 해시 일치 후보가 여러 개: 현재 스케일링된 예상 위치에 가장 가까운 요소 선택
+                let minDist = Infinity;
+                for (const el of candidates) {
+                    const elPos = window.WITQ.dom.getQuestionPositionInContainer(el, container);
+                    const dist = Math.abs(elPos - jumpPos);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        found = el;
+                    }
                 }
             }
 
             if (found) {
                 const pos = window.WITQ.dom.getQuestionPositionInContainer(found, container);
-                // 캐시/마커 entry 위치를 실측값으로 갱신
+                // 캐시/마커 entry 위치를 실측값으로 갱신 (스케일링 기준은 cacheEntry에서 읽으므로 오염 무해)
                 entry.position = pos;
+                entry.element = found;
                 const cachedData = this.questionDataCache.get(found);
                 if (cachedData) cachedData.position = pos;
                 window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
@@ -690,7 +738,7 @@ class MarkerManager {
                 return;
             }
 
-            // 못 찾았고 시도 남았으면 어림 위치 재고정 (높이 변동으로 밀렸을 수 있음)
+            // 못 찾았고 시도 남았으면 갱신된 어림 위치로 재점프 (높이 변동 반영)
             if (attempt < maxAttempts - 1) {
                 window.WITQ.dom.scrollToQuestionPosition(jumpPos, container, 'auto');
             }

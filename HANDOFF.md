@@ -23,7 +23,7 @@
 
 - 워크플로: 요구 명확화 → Coder 작업 → Director 디스크 검증 → Reviewer 리뷰 → (REJECTED면 최대 3회 재작업) → 사용자 실기기 테스트.
 - **Coder/Reviewer는 README.md / HANDOFF.md / PRIVACY_POLICY.md / manifest.json 절대 수정 금지** (Director 소유).
-- 모든 소통 한국어. 커밋은 main에 직접(사용자 확정 방침). **푸시는 사용자가 직접.**
+- 모든 소통 한국어. 커밋은 main에 직접(사용자 확정 방침). **작업 완료 후 커밋+푸시까지 Director가 수행** (2026-06-04 사용자 지시로 변경).
 - 서브에이전트는 세션 한정 → 새 세션에서 다시 스폰. SendMessage는 이름이 아니라 **agentId**로 보내야 함.
 
 ## 3. 아키텍처 스냅샷
@@ -48,15 +48,15 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 **실기기 확인 완료**: 긴 페이지 새로고침 → 스캔 → 전체 질문 마커 생성 → 즉시 점프 착지 모두 정상. 긴→짧은 SPA 이동 정상. 짧은↔짧은 정상.
 
-## 5. 남은 버그 (다음 세션 최우선)
+## 5. 짧은→긴 SPA 재진입 클릭 부정확 — 수정 완료 (2026-06-04, 실기기 최종 확인 대기)
 
-### 짧은 페이지 → 긴 페이지 SPA 재진입 시 마커 클릭 부정확
-- 증상: 재진입 시 마커들은 잘 떠 있음(캐시). 그런데 **마커를 누르면 가끔 엉뚱한 위치로 감**.
-- 맥락: 재진입 시 스캔은 의도적으로 안 함(세션 내 캐시 재사용). 좌표계 문제(마커 흔들림, 캐시 오염)는 라운드 6에서 잡았지만 클릭 착지는 여전히 불안정.
-- 의심 지점 (`content.js` `navigateToQuestion`):
-  1. 케이스 2의 첫 점프 스케일링 `jumpPos = entry.position * (currentHeight / scanHeight)` — 재진입 직후 currentHeight가 아직 자라는 중이면 점프가 빗나가고, 탐색 루프(8회)가 대상 근처에 못 가서 못 찾고 종료할 수 있음.
-  2. 케이스 1 — 재진입 직후 `entry.element`가 **다른 대화의 잔존 요소이거나 재마운트된 다른 노드**를 가리킬 가능성(WeakMap/element 레퍼런스 stale). `document.body.contains`만으로는 "같은 질문인지"는 보장 못 함.
-  3. 탐색 루프가 대상을 못 찾으면 어림 위치에 머문 채 무음 종료 — 이때 "이상한 데"로 보임. 점프 위치를 루프마다 currentHeight 재측정으로 갱신하는 것도 검토.
+`content.js` `navigateToQuestion` 재작성 (Reviewer APPROVED, 테스트 31/31):
+1. **루프마다 재스케일링**: `computeJumpPos()` 클로저가 매 시도마다 현재 scrollHeight를 재측정해 점프 위치 갱신 (stale jumpPos가 주범이었음).
+2. **스케일링 기준 position을 스캔 캐시에서 직접 읽음** — `entry.position` 오염과 무관하게 항상 스캔 좌표계 기준.
+3. **매칭 교체**: occurrence 순번 id 비교(부분 DOM에서 깨짐) → 텍스트 해시 일치 + 예상 위치 최근접 선택.
+4. **케이스 1 stale element 가드**: `document.body.contains`에 더해 텍스트 해시 검증, 불일치 시 케이스 2 폴백.
+5. **found 시 `entry.element = found` 갱신** — 연속 클릭 이중 스케일링 차단.
+
 - 디버깅: `chrome.storage.local.set({witqDebug:true})` 후 콘솔에서 `[WITQ] update {..., totalHeight, scanHeight, effHeight}` 확인. `window.__witqMM`으로 인스턴스 접근 가능.
 
 ## 6. 다음 작업 (사용자 요청, 2026-06-03)
@@ -72,7 +72,7 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 - 외부 npm 의존성 / `package.json` / `node_modules` 금지.
 - UMD 패턴 유지 (`src/modules/text.js` 참고). 주석 한국어.
 - 테스트는 순수 유틸만: `node --test tests/*.test.js` (현재 31개. **`tests/` 디렉터리만 주면 Node v24에서 실패** — 반드시 글롭 사용). 구문 검사 `node --check`.
-- 커밋은 main 직접, 푸시는 사용자.
+- 커밋은 main 직접, 작업 완료 후 푸시까지 Director가 수행.
 
 ## 8. 검증 방법
 
@@ -84,5 +84,5 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 1. 이 문서 Read → `git log --oneline -5`로 상태 확인 (마지막: `79bb871` long page fix 5 + 문서 통합 커밋).
 2. Coder/Reviewer 서브에이전트 스폰 (프로젝트 CLAUDE.md의 시스템 프롬프트 사용).
-3. **5장 버그(짧은→긴 클릭 부정확)부터** 착수 → 이후 6장 1→2→3 순서로.
-4. 각 수정마다: 디스크 검증(node --check + 테스트) → Reviewer → 사용자 실기기 테스트 → main 커밋.
+3. 5장(짧은→긴 클릭) 실기기 결과 확인 → **6장 1(즐겨찾기 별표)→2(첨부 툴팁)→3(사이트 확장)** 순서로.
+4. 각 수정마다: 디스크 검증(node --check + 테스트) → Reviewer → 사용자 실기기 테스트 → main 커밋+푸시.
