@@ -505,6 +505,8 @@ class MarkerManager {
 
         try {
             let currentScroll = 0;
+            // 연속 무변경 스텝 카운터: DOM mutation이 없는 스텝이 이어질수록 전진 폭 확대
+            let quietStreak = 0;
 
             if (this.debug) {
                 console.log('[WITQ] scan start', { convKey, totalHeight: getScrollHeight() });
@@ -542,7 +544,7 @@ class MarkerManager {
                 }
 
                 if (this.debug) {
-                    console.log('[WITQ] scan step', { currentScroll, stepCount, total: collected.size });
+                    console.log('[WITQ] scan step', { currentScroll, stepCount, total: collected.size, quietStreak });
                 }
 
                 const scrollHeight = getScrollHeight();
@@ -551,19 +553,28 @@ class MarkerManager {
                 // 하단 도달 판별
                 if (currentScroll + clientHeight >= scrollHeight - 1) break;
 
-                // 적응형 스텝: 최소 전진(0.8뷰포트) 보장 + 렌더 창 끝 직전(0.5뷰포트 겹침).
+                // 적응형 스텝: quietStreak에 따라 최소 전진 계수를 0.8~2.4로 확대.
+                // 조용한 구간 = 이미 렌더된 영역 통과 중이므로 빠르게 전진해도 질문을 놓치지 않는다.
                 // windowNext에 전진 상한(2.5뷰포트)을 둬서, 반대편 끝에 잔존한 렌더 창으로 인해
                 // maxSeenTop이 오판될 때 한 번에 멀리 점프해 중간 질문을 건너뛰는 폭주를 방지한다.
                 // max(minNext, windowNext)이므로 항상 minNext 이상 → 단조 증가 보장. 하단으로 clamp.
-                const minNext = currentScroll + clientHeight * 0.8;
+                const stepFactor = Math.min(0.8 + 0.4 * quietStreak, 2.4);
+                const minNext = currentScroll + clientHeight * stepFactor;
                 const windowNext = Math.min(maxSeenTop - clientHeight * 0.5, currentScroll + clientHeight * 2.5);
                 currentScroll = Math.min(Math.max(minNext, windowNext), scrollHeight - clientHeight);
 
                 setScrollTop(currentScroll);
                 const sawMutation = await this.waitForDomSettle(container, 200, 1500, 150);
-                // 늦은 렌더 대비: mutation을 못 봤으면 스텝당 1회만 추가 대기
-                if (!sawMutation) {
-                    await this.waitForDomSettle(container, 200, 1000, 150);
+                if (sawMutation) {
+                    // mutation 감지: 새 렌더가 시작됐으므로 연속 무변경 카운터 리셋
+                    quietStreak = 0;
+                } else if (quietStreak === 0) {
+                    // 첫 번째 무변경 스텝: 늦은 렌더 대비로 1회만 추가 대기
+                    const sawMutation2 = await this.waitForDomSettle(container, 200, 1000, 150);
+                    quietStreak = sawMutation2 ? 0 : 1;
+                } else {
+                    // 연속 무변경 구간: 추가 대기 생략하고 카운터 증가
+                    quietStreak++;
                 }
             }
 
