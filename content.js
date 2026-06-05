@@ -109,6 +109,12 @@ class MarkerManager {
         const plain = (question.innerText || question.textContent || '').trim();
         if (plain) return plain;
         const scope = this.getQuestionWrapper(question) || question;
+        // 파일 썸네일만 있는 질문(Claude는 첨부 전용이어도 빈 user-message가 렌더됨):
+        // 썸네일 파일명을 식별자로 사용해 마커 생성 누락 방지
+        const thumbNames = Array.from(scope.querySelectorAll('[data-testid="file-thumbnail"] h3'))
+            .map(h => (h.textContent || '').trim())
+            .filter(Boolean);
+        if (thumbNames.length > 0) return thumbNames.join(', ');
         if (scope.querySelector('img')) return '이미지 첨부';
         return '';
     }
