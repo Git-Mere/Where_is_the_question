@@ -59,8 +59,8 @@
     text-overflow: ellipsis;
 }
 
-/* 즐겨찾기된 질문의 컨테이너 */
-div[data-testid^="conversation-turn"], .user-query, .user-query-container, .query-with-attachments-container {
+/* 즐겨찾기된 질문의 컨테이너 (요소 태그 한정 금지: ChatGPT가 div→article로 바뀜) */
+[data-testid^="conversation-turn"], .user-query, .user-query-container, .query-with-attachments-container {
     position: relative;
 }
 

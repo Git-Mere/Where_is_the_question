@@ -952,6 +952,12 @@ class MarkerManager {
 
             if (isFavorite) {
                 if (!existingStar && questionWrapper) {
+                    // 별표는 absolute 포지셔닝: 래퍼가 containing block이 아니면
+                    // 먼 조상 기준으로 배치돼 페이지 상단에 겹쳐 쌓인다.
+                    // 사이트 DOM 변경으로 CSS 규칙이 빗나가도 인라인으로 보정.
+                    if (window.getComputedStyle(questionWrapper).position === 'static') {
+                        questionWrapper.style.position = 'relative';
+                    }
                     const star = document.createElement('div');
                     star.className = 'witq-favorite-star';
                     star.textContent = '★';
