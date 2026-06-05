@@ -116,13 +116,52 @@ window.WITQ.config = {
                 questionSelector: '[data-testid="user-message"], .font-user-message',
                 getQuestionElements: () => {
                     const primary = Array.from(document.querySelectorAll('[data-testid="user-message"]'));
-                    if (primary.length > 0) return primary;
-                    // 폴백: 구 UI 클래스
-                    return Array.from(document.querySelectorAll('.font-user-message'));
+
+                    // 첨부 전용 턴 수집: [data-test-render-count] 래퍼 중
+                    // user-message가 없고 file-thumbnail이 있는 것만 선택.
+                    // 어시스턴트 턴도 같은 래퍼를 쓰지만 file-thumbnail은 사용하지 않으므로
+                    // "user-message 부재 + file-thumbnail 존재" 조합으로 사용자 첨부 전용 턴을 식별.
+                    // (2026-06-04 실기기 DOM 샘플 기준)
+                    const attachmentOnlyTurns = Array.from(
+                        document.querySelectorAll('[data-test-render-count]')
+                    ).filter(turn =>
+                        !turn.querySelector('[data-testid="user-message"]') &&
+                        turn.querySelector('[data-testid="file-thumbnail"]')
+                    );
+
+                    const combined = [...primary, ...attachmentOnlyTurns];
+
+                    if (combined.length === 0) {
+                        // 폴백: 구 UI 클래스
+                        return Array.from(document.querySelectorAll('.font-user-message'));
+                    }
+
+                    // 문서 순서 정렬 — 순서가 어긋나면 중복 질문 occurrence 접미사와
+                    // 팝업 목록 순서가 깨지므로 compareDocumentPosition으로 정렬
+                    combined.sort((a, b) => {
+                        const pos = a.compareDocumentPosition(b);
+                        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+                        if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+                        return 0;
+                    });
+
+                    return combined;
                 },
                 getQuestionText: (questionElement) => {
-                    // 첨부 썸네일 img의 alt가 파일명인 경우가 있어 img를 파일 셀렉터로 사용
-                    return this.extractQuestionData(questionElement, null, ['img'], []);
+                    // 썸네일이 버블 밖([data-test-render-count] 래퍼 아래)에 있으므로
+                    // 컨테이너를 래퍼 전체로 확장해 파일명과 본문을 함께 추출
+                    const container = questionElement.closest('[data-test-render-count]') || questionElement;
+                    return this.extractQuestionData(
+                        container,
+                        null,
+                        // [data-testid="file-thumbnail"] h3: 깨끗한 파일명 (2026-06-04 실기기 DOM 샘플)
+                        // img: 이미지 첨부 호환용 (aria-label은 ", txt, 76 lines" 등 노이즈 포함이라 사용 안 함)
+                        ['[data-testid="file-thumbnail"] h3', 'img'],
+                        // .sr-only: h2 "You said: ..." 본문 중복 방지
+                        // [data-testid="file-thumbnail"]: 파일명·종류 라벨·줄 수가 본문으로 새는 것 방지
+                        // [role="group"]: 액션 바 타임스탬프("7:25 PM") 제외 (aria-label="Message actions"는 로케일 의존)
+                        ['.sr-only', '[data-testid="file-thumbnail"]', '[role="group"]']
+                    );
                 }
             },
             grok: {
