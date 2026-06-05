@@ -101,7 +101,7 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 추가 완료 (2026-06-04): 미사용 코드 제거 — `clearScanCache`(재스캔 정책 이후 고아), `getQuestions` 도달 불가 폴백, `createMarkerElement`/`updateMarkerElement`의 미사용 container 파라미터. 고아 인스턴스(확장 재로드 후 F5 안 한 탭)의 `Extension context invalidated` unhandled rejection 수정 — `getFavorites`에 `chrome.runtime.id` 가드, 우클릭 핸들러 catch + 컨텍스트 사망 시 `destroy()`.
 
-미뤄둔 LOW 항목(이전부터): isQuestion 한국어 판별 개선, 레이아웃 스래싱, 메시지 편집/재생성/삭제 시 재스캔, `__witqMM` 노출 debug 게이팅. (해소됨: scanHeight stale → 재스캔 정책, 연타 가드 → navToken)
+미뤄둔 LOW 항목(이전부터): 레이아웃 스래싱, 메시지 편집/재생성/삭제 시 재스캔, `__witqMM` 노출 debug 게이팅. (해소됨: scanHeight stale → 재스캔 정책, 연타 가드 → navToken. 제외 판정 2026-06-05: isQuestion 한국어 판별 — `is-question` 클래스를 참조하는 CSS/JS가 없어 기능 자체가 죽어 있음(개선 무의미, 오히려 데드 코드 정리 후보). 짧은→긴 재진입 클릭 버그 — 사용자 확인 결과 이미 해결됨)
 
 ## 7. 제약 (반드시 지킬 것)
 
@@ -114,7 +114,7 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 - `chrome://extensions` → 개발자 모드 → 압축 해제 로드. 코드 수정 후엔 **확장 새로고침 + 페이지 F5 둘 다** (안 하면 고아 인스턴스).
 - 디버그 로그: 콘솔에서 `chrome.storage.local.set({witqDebug:true})` → F5. 끄기: `{witqDebug:false}`. **현재 사용자 기기에 켜져 있음.**
-- 시나리오: 짧은 페이지 새로고침 / 긴 페이지 새로고침(스캔) / 짧은↔짧은 / 긴→짧은 / 짧은→긴(재진입 클릭 = 남은 버그) / 마커 클릭 착지 / 즐겨찾기 / 휠 스크롤 중 마커 고정 여부.
+- 시나리오: 짧은 페이지 새로고침 / 긴 페이지 새로고침(스캔) / 짧은↔짧은 / 긴→짧은 / 짧은→긴(재진입 클릭 버그는 해결 확인 2026-06-05) / 마커 클릭 착지 / 즐겨찾기 / 휠 스크롤 중 마커 고정 여부.
 
 ## 9. 다음 세션 재개 순서
 
