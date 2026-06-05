@@ -32,6 +32,9 @@ class MarkerManager {
         // 디버그 로그 토글 (사용자 재현 시 수동으로 true)
         this.debug = false;
 
+        // 내비게이션 연타 가드: 새 클릭이 이전 이동을 취소하기 위한 토큰
+        this.navToken = 0;
+
         // 고아 인스턴스 방지: 새 스크립트가 teardown 이벤트를 쏘면 이전 인스턴스 정리.
         // 이 인스턴스도 이후 teardown을 수신하면 스스로 정리한다.
         this.destroyed = false;
@@ -615,224 +618,238 @@ class MarkerManager {
         }
     }
 
-    // 착지 보정 루프: 점프 후 DOM이 안정될 때까지 기다리며 실제 요소 위치로 미세 보정.
-    // 긴 페이지에서 가상화 렌더로 높이가 출렁여 목표를 지나치는 문제를 잡는다.
-    async _settleAndCorrect(el, container, maxIter = 3) {
-        for (let i = 0; i < maxIter; i++) {
-            await this.waitForDomSettle(container, 150, 600, 120);
-            if (!el || !document.body.contains(el)) return;
-            const pos = window.WITQ.dom.getQuestionPositionInContainer(el, container);
-            const offset = window.WITQ.dom.getScrollOffset(container);
-            const target = Math.max(pos - offset, 0);
-            const cur = (container === window) ? window.scrollY : container.scrollTop;
-            if (Math.abs(cur - target) <= 4) return;
-            window.WITQ.dom.scrollToQuestionPosition(pos, container, 'auto');
-        }
-    }
-
-    // 마커 클릭 시 이동: 긴 페이지는 즉시 점프(auto)로 통일하고 착지 보정,
+    // 마커 클릭 시 이동: 긴 페이지는 즉시 점프(auto)로 통일,
     // 짧은 페이지는 기존 smooth 유지.
+    // 사용자 입력(wheel/touchstart/keydown) 감지 시 대기/재점프를 즉시 중단.
     async navigateToQuestion(id) {
         const entry = this.markers.get(id);
         if (!entry) return;
 
-        const container = window.WITQ.dom.getScrollContainer();
-        const isWindow = container === window;
-        const viewport = isWindow ? window.innerHeight : container.clientHeight;
-        const convKey = window.WITQ.storage.getConversationKey();
-        const cacheEntry = window.WITQ.storage.getScanCache(convKey);
-        const scanHeight = cacheEntry ? cacheEntry.scanHeight : 0;
+        // 연타 가드: 새 클릭이 이전 이동을 취소
+        const token = ++this.navToken;
 
-        // 스캔 캐시에서 스케일링 기준 position을 직접 읽어 좌표계 오염 방지.
-        // 캐시에 해당 id 항목이 없으면 entry.position으로 폴백.
-        let basePosition = entry.position;
-        if (cacheEntry && cacheEntry.questions) {
-            const cacheQuestion = cacheEntry.questions.find(q => q.id === id);
-            if (cacheQuestion) basePosition = cacheQuestion.position;
-        }
+        // 사용자 스크롤/입력 감지 → 대기 후 모든 재시도 중단
+        let userInterrupted = false;
+        const onUserInput = () => { userInterrupted = true; };
+        window.addEventListener('wheel', onUserInput, { passive: true, capture: true });
+        window.addEventListener('touchstart', onUserInput, { passive: true, capture: true });
+        window.addEventListener('keydown', onUserInput, { passive: true, capture: true });
 
-        // id의 해시부 (순번 접미사 제거): 매칭에 사용
-        const expectedHash = String(id).split('-')[0];
+        try {
+            const container = window.WITQ.dom.getScrollContainer();
+            const isWindow = container === window;
+            const viewport = isWindow ? window.innerHeight : container.clientHeight;
+            const convKey = window.WITQ.storage.getConversationKey();
+            const cacheEntry = window.WITQ.storage.getScanCache(convKey);
+            const scanHeight = cacheEntry ? cacheEntry.scanHeight : 0;
 
-        // 스캔 캐시가 있거나 현재 높이가 충분히 길면 긴 페이지로 간주 → 즉시 점프
-        const currentHeightNow = isWindow ? document.documentElement.scrollHeight : container.scrollHeight;
-        const isLong = !!cacheEntry || currentHeightNow > viewport * 3;
-        const behavior = isLong ? 'auto' : 'smooth';
+            // 스캔 캐시에서 스케일링 기준 position을 직접 읽어 좌표계 오염 방지.
+            // 캐시에 해당 id 항목이 없으면 entry.position으로 폴백.
+            let basePosition = entry.position;
+            if (cacheEntry && cacheEntry.questions) {
+                const cacheQuestion = cacheEntry.questions.find(q => q.id === id);
+                if (cacheQuestion) basePosition = cacheQuestion.position;
+            }
 
-        // 케이스 1: 이미 렌더된 요소면 실제 위치 재측정 후 이동.
-        // stale 요소 검증: 요소 텍스트 해시가 id 해시부와 일치해야 신뢰.
-        if (entry.element && document.body.contains(entry.element)) {
-            const elPlain = (entry.element.innerText || entry.element.textContent || '').trim();
-            const elHash = elPlain
-                ? String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(elPlain)))
-                : null;
-            if (elHash && elHash === expectedHash) {
-                if (this.debug) console.log('[WITQ] nav', { id, case: 1, basePosition, scanHeight, liveHeight: isWindow ? document.documentElement.scrollHeight : container.scrollHeight });
-                const pos = window.WITQ.dom.getQuestionPositionInContainer(entry.element, container);
-                entry.position = pos;
-                window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
-                if (isLong) {
-                    await this._settleAndCorrect(entry.element, container);
-                    // 보정 후 마지막 실측값으로 갱신
-                    if (document.body.contains(entry.element)) {
-                        entry.position = window.WITQ.dom.getQuestionPositionInContainer(entry.element, container);
+            // id의 해시부 (순번 접미사 제거): 매칭에 사용
+            const expectedHash = String(id).split('-')[0];
+
+            // 스캔 캐시가 있거나 현재 높이가 충분히 길면 긴 페이지로 간주 → 즉시 점프
+            const currentHeightNow = isWindow ? document.documentElement.scrollHeight : container.scrollHeight;
+            const isLong = !!cacheEntry || currentHeightNow > viewport * 3;
+            const behavior = isLong ? 'auto' : 'smooth';
+
+            // 케이스 1: 이미 렌더된 요소면 실제 위치 재측정 후 이동.
+            // stale 요소 검증: 요소 텍스트 해시가 id 해시부와 일치해야 신뢰.
+            if (entry.element && document.body.contains(entry.element)) {
+                const elPlain = (entry.element.innerText || entry.element.textContent || '').trim();
+                const elHash = elPlain
+                    ? String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(elPlain)))
+                    : null;
+                if (elHash && elHash === expectedHash) {
+                    if (this.debug) console.log('[WITQ] nav', { id, case: 1, basePosition, scanHeight, liveHeight: isWindow ? document.documentElement.scrollHeight : container.scrollHeight });
+                    const pos = window.WITQ.dom.getQuestionPositionInContainer(entry.element, container);
+                    entry.position = pos;
+                    // 케이스 1 최초 이동: 클릭 직접 응답이므로 중단 체크 없이 수행
+                    window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
+                    return;
+                }
+                // 해시 불일치: stale 요소로 간주하고 케이스 2로 진행
+            }
+
+            // 케이스 2: 캐시만 있음 — 앵커 기반 추정 위치로 점프 후 렌더 대기/탐색.
+            // 앵커: 현재 마운트된 질문 중 캐시에서 유일 해시로 식별 가능한 항목.
+            // jumpPos = 앵커 라이브 위치 + (basePosition - 앵커 캐시 위치).
+            // 앵커 없으면 비례 스케일링 폴백.
+
+            // 캐시 해시 맵 사전 구성: 해시부 → {position, count}.
+            // count > 1인 해시는 중복 텍스트라 앵커로 불가.
+            const cacheHashMap = new Map();
+            if (cacheEntry && cacheEntry.questions) {
+                for (const q of cacheEntry.questions) {
+                    const h = String(q.id).split('-')[0];
+                    const existing = cacheHashMap.get(h);
+                    if (existing) {
+                        existing.count++;
+                    } else {
+                        cacheHashMap.set(h, { position: q.position, count: 1 });
                     }
                 }
-                return;
-            }
-            // 해시 불일치: stale 요소로 간주하고 케이스 2로 진행
-        }
-
-        // 케이스 2: 캐시만 있음 — 앵커 기반 추정 위치로 점프 후 렌더 대기/탐색.
-        // 앵커: 현재 마운트된 질문 중 캐시에서 유일 해시로 식별 가능한 항목.
-        // jumpPos = 앵커 라이브 위치 + (basePosition - 앵커 캐시 위치).
-        // 앵커 없으면 비례 스케일링 폴백.
-
-        // 캐시 해시 맵 사전 구성: 해시부 → {position, count}.
-        // count > 1인 해시는 중복 텍스트라 앵커로 불가.
-        const cacheHashMap = new Map();
-        if (cacheEntry && cacheEntry.questions) {
-            for (const q of cacheEntry.questions) {
-                const h = String(q.id).split('-')[0];
-                const existing = cacheHashMap.get(h);
-                if (existing) {
-                    existing.count++;
-                } else {
-                    cacheHashMap.set(h, { position: q.position, count: 1 });
-                }
-            }
-        }
-
-        // 현재 liveHeight를 재측정해 반환하는 헬퍼
-        const getLiveHeight = () => isWindow ? document.documentElement.scrollHeight : container.scrollHeight;
-
-        // 앵커 없을 때 쓰는 비례 스케일링 폴백
-        const fallbackJumpPos = () => {
-            const liveHeight = getLiveHeight();
-            return scanHeight ? basePosition * (liveHeight / scanHeight) : basePosition;
-        };
-
-        if (this.debug) console.log('[WITQ] nav', { id, case: 2, basePosition, scanHeight, liveHeight: getLiveHeight() });
-
-        // 최초 점프: 초기 렌더 목록으로 앵커를 탐색하고 앵커 기반 jumpPos 계산,
-        // 앵커 없으면 폴백 스케일링으로 1회 점프.
-        const initialQuestions = this.getQuestions();
-        let initialAnchors = [];
-        for (const el of initialQuestions) {
-            const plain = (el.innerText || el.textContent || '').trim();
-            if (!plain) continue;
-            const h = String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(plain)));
-            const cached = cacheHashMap.get(h);
-            if (cached && cached.count === 1 && h !== expectedHash) {
-                initialAnchors.push({ el, cachePos: cached.position });
-            }
-        }
-
-        let jumpPos;
-        if (initialAnchors.length > 0) {
-            // basePosition에 가장 가까운 앵커를 선택해 초기 jumpPos 계산
-            let best = initialAnchors[0];
-            let bestDist = Math.abs(best.cachePos - basePosition);
-            for (let i = 1; i < initialAnchors.length; i++) {
-                const d = Math.abs(initialAnchors[i].cachePos - basePosition);
-                if (d < bestDist) { bestDist = d; best = initialAnchors[i]; }
-            }
-            const anchorLivePos = window.WITQ.dom.getQuestionPositionInContainer(best.el, container);
-            jumpPos = Math.max(anchorLivePos + (basePosition - best.cachePos), 0);
-        } else {
-            jumpPos = fallbackJumpPos();
-        }
-        window.WITQ.dom.scrollToQuestionPosition(jumpPos, container, 'auto');
-
-        const maxAttempts = 8;
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            const sawMutation = await this.waitForDomSettle(container, 150, 800, 120);
-            // 늦은 렌더 대비: mutation을 못 봤으면 이 시도에서 1회만 추가 대기
-            if (!sawMutation) {
-                await this.waitForDomSettle(container, 150, 600, 120);
             }
 
-            // 대화 전환 감지 시 중단
-            if (window.WITQ.storage.getConversationKey() !== convKey) return;
+            // 현재 liveHeight를 재측정해 반환하는 헬퍼
+            const getLiveHeight = () => isWindow ? document.documentElement.scrollHeight : container.scrollHeight;
 
-            // sweep 한 번으로 목표 후보와 앵커 후보를 동시 수집
-            const questions = this.getQuestions();
-            const candidates = []; // 목표 후보 (expectedHash 일치)
-            const anchors = [];    // 앵커 후보 (캐시에서 유일 해시, count === 1)
-            for (const el of questions) {
+            // 앵커 없을 때 쓰는 비례 스케일링 폴백
+            const fallbackJumpPos = () => {
+                const liveHeight = getLiveHeight();
+                return scanHeight ? basePosition * (liveHeight / scanHeight) : basePosition;
+            };
+
+            if (this.debug) console.log('[WITQ] nav', { id, case: 2, basePosition, scanHeight, liveHeight: getLiveHeight() });
+
+            // 최초 점프: 초기 렌더 목록으로 앵커를 탐색하고 앵커 기반 jumpPos 계산,
+            // 앵커 없으면 폴백 스케일링으로 1회 점프.
+            const initialQuestions = this.getQuestions();
+            let initialAnchors = [];
+            for (const el of initialQuestions) {
                 const plain = (el.innerText || el.textContent || '').trim();
                 if (!plain) continue;
                 const h = String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(plain)));
-                if (h === expectedHash) {
-                    candidates.push(el);
-                } else {
-                    const cached = cacheHashMap.get(h);
-                    if (cached && cached.count === 1) {
-                        anchors.push({ el, cachePos: cached.position });
-                    }
+                const cached = cacheHashMap.get(h);
+                if (cached && cached.count === 1 && h !== expectedHash) {
+                    initialAnchors.push({ el, cachePos: cached.position });
                 }
             }
 
-            // 앵커 기반 jumpPos 재계산: basePosition에 가장 가까운 앵커 선택
-            let selectedAnchorCachePos = null;
-            if (anchors.length > 0) {
-                let best = anchors[0];
+            let jumpPos;
+            if (initialAnchors.length > 0) {
+                // basePosition에 가장 가까운 앵커를 선택해 초기 jumpPos 계산
+                let best = initialAnchors[0];
                 let bestDist = Math.abs(best.cachePos - basePosition);
-                for (let i = 1; i < anchors.length; i++) {
-                    const d = Math.abs(anchors[i].cachePos - basePosition);
-                    if (d < bestDist) { bestDist = d; best = anchors[i]; }
+                for (let i = 1; i < initialAnchors.length; i++) {
+                    const d = Math.abs(initialAnchors[i].cachePos - basePosition);
+                    if (d < bestDist) { bestDist = d; best = initialAnchors[i]; }
                 }
-                selectedAnchorCachePos = best.cachePos;
                 const anchorLivePos = window.WITQ.dom.getQuestionPositionInContainer(best.el, container);
                 jumpPos = Math.max(anchorLivePos + (basePosition - best.cachePos), 0);
             } else {
-                // 앵커 없으면 비례 스케일링 폴백
                 jumpPos = fallbackJumpPos();
             }
+            // 케이스 2 최초 점프: 클릭 직접 응답이므로 중단 체크 없이 수행
+            window.WITQ.dom.scrollToQuestionPosition(jumpPos, container, 'auto');
 
-            // 해시 일치 후보 중 jumpPos에 가장 가까운 요소 선택
-            let found = null;
-            if (candidates.length === 1) {
-                found = candidates[0];
-            } else if (candidates.length > 1) {
-                // 해시 일치 후보가 여러 개: 직전 jumpPos 기준으로 가장 가까운 요소 선택
-                let minDist = Infinity;
-                for (const el of candidates) {
-                    const elPos = window.WITQ.dom.getQuestionPositionInContainer(el, container);
-                    const dist = Math.abs(elPos - jumpPos);
-                    if (dist < minDist) {
-                        minDist = dist;
-                        found = el;
+            const maxAttempts = 3;
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                const sawMutation = await this.waitForDomSettle(container, 150, 800, 120);
+                // 늦은 렌더 대비: mutation을 못 봤으면 이 시도에서 1회만 추가 대기
+                if (!sawMutation) {
+                    await this.waitForDomSettle(container, 150, 600, 120);
+                }
+
+                // 연타 가드: 새 클릭이 들어왔으면 중단
+                if (token !== this.navToken) {
+                    if (this.debug) console.log('[WITQ] nav abort', { id, reason: 'superseded' });
+                    return;
+                }
+
+                // 사용자 입력으로 중단
+                if (userInterrupted) {
+                    if (this.debug) console.log('[WITQ] nav abort', { id, reason: 'user-input' });
+                    return;
+                }
+
+                // 대화 전환 감지 시 중단
+                if (window.WITQ.storage.getConversationKey() !== convKey) return;
+
+                // sweep 한 번으로 목표 후보와 앵커 후보를 동시 수집
+                const questions = this.getQuestions();
+                const candidates = []; // 목표 후보 (expectedHash 일치)
+                const anchors = [];    // 앵커 후보 (캐시에서 유일 해시, count === 1)
+                for (const el of questions) {
+                    const plain = (el.innerText || el.textContent || '').trim();
+                    if (!plain) continue;
+                    const h = String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(plain)));
+                    if (h === expectedHash) {
+                        candidates.push(el);
+                    } else {
+                        const cached = cacheHashMap.get(h);
+                        if (cached && cached.count === 1) {
+                            anchors.push({ el, cachePos: cached.position });
+                        }
                     }
                 }
-            }
 
-            if (this.debug) console.log('[WITQ] nav attempt', { attempt, jumpPos, anchorCachePos: selectedAnchorCachePos, anchors: anchors.length, liveHeight: getLiveHeight(), found: !!found });
+                // 앵커 기반 jumpPos 재계산: basePosition에 가장 가까운 앵커 선택
+                let selectedAnchorCachePos = null;
+                if (anchors.length > 0) {
+                    let best = anchors[0];
+                    let bestDist = Math.abs(best.cachePos - basePosition);
+                    for (let i = 1; i < anchors.length; i++) {
+                        const d = Math.abs(anchors[i].cachePos - basePosition);
+                        if (d < bestDist) { bestDist = d; best = anchors[i]; }
+                    }
+                    selectedAnchorCachePos = best.cachePos;
+                    const anchorLivePos = window.WITQ.dom.getQuestionPositionInContainer(best.el, container);
+                    jumpPos = Math.max(anchorLivePos + (basePosition - best.cachePos), 0);
+                } else {
+                    // 앵커 없으면 비례 스케일링 폴백
+                    jumpPos = fallbackJumpPos();
+                }
 
-            if (found) {
-                const pos = window.WITQ.dom.getQuestionPositionInContainer(found, container);
-                // 캐시/마커 entry 위치를 실측값으로 갱신 (스케일링 기준은 cacheEntry에서 읽으므로 오염 무해)
-                entry.position = pos;
-                entry.element = found;
-                const cachedData = this.questionDataCache.get(found);
-                if (cachedData) cachedData.position = pos;
-                window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
-                if (isLong) {
-                    await this._settleAndCorrect(found, container);
-                    if (document.body.contains(found)) {
-                        entry.position = window.WITQ.dom.getQuestionPositionInContainer(found, container);
+                // 해시 일치 후보 중 jumpPos에 가장 가까운 요소 선택
+                let found = null;
+                if (candidates.length === 1) {
+                    found = candidates[0];
+                } else if (candidates.length > 1) {
+                    // 해시 일치 후보가 여러 개: 직전 jumpPos 기준으로 가장 가까운 요소 선택
+                    let minDist = Infinity;
+                    for (const el of candidates) {
+                        const elPos = window.WITQ.dom.getQuestionPositionInContainer(el, container);
+                        const dist = Math.abs(elPos - jumpPos);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            found = el;
+                        }
                     }
                 }
-                return;
-            }
 
-            // 못 찾았고 시도 남았으면 앵커 기반(또는 폴백) 갱신 위치로 재점프
-            if (attempt < maxAttempts - 1) {
-                window.WITQ.dom.scrollToQuestionPosition(jumpPos, container, 'auto');
+                if (this.debug) console.log('[WITQ] nav attempt', { attempt, jumpPos, anchorCachePos: selectedAnchorCachePos, anchors: anchors.length, liveHeight: getLiveHeight(), found: !!found });
+
+                if (found) {
+                    const pos = window.WITQ.dom.getQuestionPositionInContainer(found, container);
+                    // 캐시/마커 entry 위치를 실측값으로 갱신 (스케일링 기준은 cacheEntry에서 읽으므로 오염 무해)
+                    entry.position = pos;
+                    entry.element = found;
+                    const cachedData = this.questionDataCache.get(found);
+                    if (cachedData) cachedData.position = pos;
+                    window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
+                    return;
+                }
+
+                // 못 찾았고 시도 남았으면: 중단 체크 후 앵커 기반(또는 폴백) 갱신 위치로 재점프
+                if (attempt < maxAttempts - 1) {
+                    // 연타 가드
+                    if (token !== this.navToken) {
+                        if (this.debug) console.log('[WITQ] nav abort', { id, reason: 'superseded' });
+                        return;
+                    }
+                    // 사용자 입력으로 중단
+                    if (userInterrupted) {
+                        if (this.debug) console.log('[WITQ] nav abort', { id, reason: 'user-input' });
+                        return;
+                    }
+                    window.WITQ.dom.scrollToQuestionPosition(jumpPos, container, 'auto');
+                }
             }
+            // 끝까지 못 찾으면 어림 위치에 머문 채 종료 (무음)
+            if (this.debug) console.log('[WITQ] nav give-up', { id, lastJumpPos: jumpPos });
+        } finally {
+            // 모든 종료 경로에서 리스너 해제 보장 (capture 옵션 일치)
+            window.removeEventListener('wheel', onUserInput, { capture: true });
+            window.removeEventListener('touchstart', onUserInput, { capture: true });
+            window.removeEventListener('keydown', onUserInput, { capture: true });
         }
-        // 끝까지 못 찾으면 어림 위치에 머문 채 종료 (무음)
-        if (this.debug) console.log('[WITQ] nav give-up', { id, lastJumpPos: jumpPos });
     }
 
     // --- 마커 DOM 생성/갱신 ---

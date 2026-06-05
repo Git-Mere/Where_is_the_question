@@ -61,6 +61,14 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 스캔 속도 최적화(quietStreak)는 **실기기에서 확실히 빨라짐 확인** (2026-06-04).
 
+### 클릭 보정 제거 + 사용자 입력 즉시 중단 (2026-06-04, 사용자 결정)
+클릭 직후 휠 조작 시 보정 루프가 스크롤을 마커 쪽으로 되돌리는 불편 해소:
+- `_settleAndCorrect`(착지 후 최대 3회 미세 보정) 완전 삭제.
+- 케이스 2 탐색 maxAttempts 8 → 3.
+- **사용자 입력 중단**: 이동 중 wheel/touchstart/keydown(전역 캡처, passive) 감지 시 후속 대기/재점프 즉시 포기. 최초 점프는 클릭 직접 응답이라 항상 수행. try/finally로 리스너 해제 보장.
+- **연타 가드**: `this.navToken` 토큰으로 새 클릭이 이전 이동 루프를 취소 (기존 LOW 항목 해소).
+- 디버그 로그 `[WITQ] nav abort {id, reason: 'user-input'|'superseded'}` 추가.
+
 ### 정책 변경 (2026-06-04, 사용자 결정): 대화 진입 시마다 재스캔
 스캔이 빨라진 것을 계기로, SPA 재진입 시 캐시만 재사용하는 복잡한 경로를 줄이기 위해 **URL 변경 시 새 대화 키를 `scannedKeys`에서 삭제** → 긴 페이지면 자동 스캔이 매 진입마다 다시 돈다. 기존 캐시는 유지되어 재진입 직후 마커가 즉시 뜨고, 스캔 완료 시 갱신됨. 캐시 낡음(scanHeight stale, 새 메시지 추가) 문제도 함께 해소. 앵커 기반 클릭 탐색은 스캔 후에도 언마운트 대상 착지에 필요하므로 유지.
 
@@ -72,7 +80,7 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 2. **첨부파일 툴팁 형식 변경**: 현재 첨부물을 `[ ]`로 감싸 표시하는데, 글만 있는 질문에서도 일부 텍스트가 의미 없이 `[ ]`로 감싸지는 오작동 있음. **`[ ]` 방식 제거**하고, png/pdf/docx 등 첨부 감지 시 툴팁 **첫 줄에 `*png 첨부` 형식**으로 표시. (`config.js` 첨부 추출 + `content.js` `formatTooltipHtml` 정리)
 3. **지원 사이트 확장**: 현재 ChatGPT/Gemini만 지원. 요즘 많이 쓰는 챗봇형 AI 조사(Claude, Grok 등) 후 전부 지원 목표. (`config.js` 사이트 분기 구조 확장 + `manifest.json` matches 추가 — manifest는 Director가 수정)
 
-미뤄둔 LOW 항목(이전부터): isQuestion 한국어 판별 개선, 레이아웃 스래싱, 메시지 편집/재생성/삭제 시 재스캔, 스캔 후 새 질문 다수 추가 시 마커 상단 쏠림(scanHeight stale), navigateToQuestion 연타 가드, `__witqMM` 노출 debug 게이팅.
+미뤄둔 LOW 항목(이전부터): isQuestion 한국어 판별 개선, 레이아웃 스래싱, 메시지 편집/재생성/삭제 시 재스캔, `__witqMM` 노출 debug 게이팅. (해소됨: scanHeight stale → 재스캔 정책, 연타 가드 → navToken)
 
 ## 7. 제약 (반드시 지킬 것)
 
