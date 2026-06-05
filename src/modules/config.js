@@ -172,9 +172,15 @@ window.WITQ.config = {
                 }
             },
             grok: {
-                questionSelector: 'div[id^="response-"] .message-bubble',
+                questionSelector: 'div[id^="response-"] [data-testid="user-message"], div[id^="response-"] .message-bubble',
                 getQuestionElements: () => {
-                    // 행 단위로 순회: AI 답변 마커(.response-content-markdown)가 없는 행이 사용자 메시지
+                    // 2026-06 DOM: 사용자 버블에 data-testid="user-message"가 생겼고,
+                    // 사용자 버블 안에도 .response-content-markdown이 렌더되어 구 판별(md 없는 행)이 무효화됨
+                    const bubbles = Array.from(
+                        document.querySelectorAll('div[id^="response-"] [data-testid="user-message"]')
+                    );
+                    if (bubbles.length > 0) return bubbles;
+                    // 폴백 1: 구 DOM — AI 답변 마커(.response-content-markdown)가 없는 행이 사용자 메시지
                     const rows = Array.from(document.querySelectorAll('div[id^="response-"]'));
                     const userBubbles = [];
                     rows.forEach(row => {
@@ -183,13 +189,26 @@ window.WITQ.config = {
                         if (bubble) userBubbles.push(bubble);
                     });
                     if (userBubbles.length > 0) return userBubbles;
-                    // 폴백: 오른쪽 정렬(.items-end) 행 전체
+                    // 폴백 2: 오른쪽 정렬(.items-end) 행 전체
                     return rows.filter(row =>
                         row.classList.contains('items-end') || row.querySelector(':scope > .items-end')
                     );
                 },
                 getQuestionText: (questionElement) => {
-                    return this.extractQuestionData(questionElement, null, ['img'], []);
+                    // 첨부 칩([class*="group/chip"])이 버블 밖(행 직속 스트립)에 있어
+                    // 컨테이너를 행 전체로 확장해 파일명과 본문을 함께 추출
+                    const container = questionElement.closest('div[id^="response-"]') || questionElement;
+                    return this.extractQuestionData(
+                        container,
+                        null,
+                        // 칩 파일명: span.truncate(textContent="Instruction.pdf"). 칩 button 자체에도
+                        // truncate 클래스가 있어 span으로 한정 (2026-06-04 실기기 DOM 샘플)
+                        // img: 이미지 칩(alt 빈 img) — 파일명이 없어 extractQuestionData에서 '이미지'로 집계
+                        ['[class*="group/chip"] span.truncate', 'img'],
+                        // 칩 전체(파일 종류 라벨 "PDF" 등), 액션 바, 편집/복사 버튼이 본문으로 새는 것 방지
+                        // — 사용자 버블 안에는 버튼이 없어 button 전역 제외가 안전
+                        ['[class*="group/chip"]', '.action-buttons', 'button']
+                    );
                 }
             },
             unknown: {
@@ -220,7 +239,11 @@ window.WITQ.config = {
                     fileEl.textContent ||
                     ''
                 ).trim();
-                if (!raw) return;
+                if (!raw) {
+                    // 식별 텍스트가 전혀 없는 이미지(예: Grok png 칩의 alt 빈 img)는 '이미지'로 집계
+                    if (fileEl.tagName === 'IMG') imageUploadCount++;
+                    return;
+                }
 
                 if (fileEl.tagName === 'IMG' && (raw.toLowerCase() === 'image' || raw.toLowerCase().startsWith('image:'))) {
                     imageUploadCount++;
