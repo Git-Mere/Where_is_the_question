@@ -163,9 +163,11 @@ window.WITQ.config = {
                         // img: 이미지 첨부 호환용 (aria-label은 ", txt, 76 lines" 등 노이즈 포함이라 사용 안 함)
                         ['[data-testid="file-thumbnail"] h3', 'img'],
                         // .sr-only: h2 "You said: ..." 본문 중복 방지
-                        // [data-testid="file-thumbnail"]: 파일명·종류 라벨·줄 수가 본문으로 새는 것 방지
-                        // [role="group"]: 액션 바 타임스탬프("7:25 PM") 제외 (aria-label="Message actions"는 로케일 의존)
-                        ['.sr-only', '[data-testid="file-thumbnail"]', '[role="group"]']
+                        // 썸네일(file-thumbnail/group/thumbnail): 파일명·종류 라벨·줄 수가 본문으로 새는 것 방지
+                        // [role="group"]: 액션 바 (aria-label="Message actions"는 로케일 의존)
+                        // button/.text-text-500: 첨부 전용 턴은 role=group 없는 액션 바 변형이 있어
+                        // 타임스탬프("7:28 PM")와 아이콘 폰트 글리프가 샘 — 사용자 버블에는 버튼이 없어 안전
+                        ['.sr-only', '[data-testid="file-thumbnail"]', '[class*="group/thumbnail"]', '[role="group"]', 'button', '.text-text-500']
                     );
                 }
             },
