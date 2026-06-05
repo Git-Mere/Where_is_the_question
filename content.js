@@ -94,6 +94,18 @@ class MarkerManager {
         return questionEl;
     }
 
+    // 질문 요소의 식별용 플레인 텍스트.
+    // 텍스트가 전혀 없는 질문(이미지만 첨부)은 innerText가 빈 문자열이라
+    // 마커 생성에서 누락되므로 '이미지 첨부' 대체 식별자를 사용한다.
+    // 이미지만 있는 질문이 여러 개면 generateQuestionId의 occurrence 접미사가 구분한다.
+    getPlainIdentity(question) {
+        const plain = (question.innerText || question.textContent || '').trim();
+        if (plain) return plain;
+        const scope = this.getQuestionWrapper(question) || question;
+        if (scope.querySelector('img')) return '이미지 첨부';
+        return '';
+    }
+
     buildStructuredTextFromPlain(plain) {
         if (!plain) return '';
         // 아이콘 노이즈 제거 후 you said 제거, 공백 정리, HTML 이스케이프
@@ -329,7 +341,7 @@ class MarkerManager {
         const currentPos = window.WITQ.dom.getQuestionPositionInContainer(question, container);
 
         if (!cached || Math.abs(cached.position - currentPos) > 1 || cached.index !== index) {
-            const plainFallback = (question.innerText || question.textContent || '').trim();
+            const plainFallback = this.getPlainIdentity(question);
             if (!plainFallback) return null;
             const fastText = this.buildStructuredTextFromPlain(plainFallback);
 
@@ -351,7 +363,7 @@ class MarkerManager {
         let detailed = this.config.getQuestionText(question);
         const hasRenderableText = !!(detailed && detailed.replace(/<[^>]+>/g, '').trim());
         if (!hasRenderableText) {
-            const plainFallback = (question.innerText || question.textContent || '').trim();
+            const plainFallback = this.getPlainIdentity(question);
             if (plainFallback) {
                 detailed = this.buildStructuredTextFromPlain(plainFallback);
             } else {
@@ -385,7 +397,7 @@ class MarkerManager {
         let occurrence = 0;
         for (const q of allQuestions) {
             if (q === question) break;
-            const qPlain = (q.innerText || q.textContent || '').trim();
+            const qPlain = this.getPlainIdentity(q);
             if (window.WITQ.text.normalizePlainText(qPlain) === normalized) occurrence++;
         }
         return occurrence === 0 ? hash : `${hash}-${occurrence}`;
@@ -504,7 +516,7 @@ class MarkerManager {
                 let stepCount = 0;
                 let maxSeenTop = 0; // 이번 스텝에서 본 질문들의 최대 position (적응형 스텝용)
                 for (const el of questions) {
-                    const plain = (el.innerText || el.textContent || '').trim();
+                    const plain = this.getPlainIdentity(el);
                     if (!plain) continue;
 
                     const id = this.generateQuestionId(el, plain, allQuestionsSnapshot);
@@ -631,7 +643,7 @@ class MarkerManager {
             // 케이스 1: 이미 렌더된 요소면 실제 위치 재측정 후 이동.
             // stale 요소 검증: 요소 텍스트 해시가 id 해시부와 일치해야 신뢰.
             if (entry.element && document.body.contains(entry.element)) {
-                const elPlain = (entry.element.innerText || entry.element.textContent || '').trim();
+                const elPlain = this.getPlainIdentity(entry.element);
                 const elHash = elPlain
                     ? String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(elPlain)))
                     : null;
@@ -682,7 +694,7 @@ class MarkerManager {
             const initialQuestions = this.getQuestions();
             let initialAnchors = [];
             for (const el of initialQuestions) {
-                const plain = (el.innerText || el.textContent || '').trim();
+                const plain = this.getPlainIdentity(el);
                 if (!plain) continue;
                 const h = String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(plain)));
                 const cached = cacheHashMap.get(h);
@@ -736,7 +748,7 @@ class MarkerManager {
                 const candidates = []; // 목표 후보 (expectedHash 일치)
                 const anchors = [];    // 앵커 후보 (캐시에서 유일 해시, count === 1)
                 for (const el of questions) {
-                    const plain = (el.innerText || el.textContent || '').trim();
+                    const plain = this.getPlainIdentity(el);
                     if (!plain) continue;
                     const h = String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(plain)));
                     if (h === expectedHash) {
