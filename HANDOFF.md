@@ -1,7 +1,7 @@
 # Where is the Question? — 개발 인수인계 문서 (통합본)
 
 > 다음 Claude Code 세션에서 이 문서 하나로 바로 작업을 이어가기 위한 정리.
-> (기존 DEV_MEMORY.md + HANDOFF.md를 이 파일로 통합. 2026-06-03 갱신)
+> (기존 DEV_MEMORY.md + HANDOFF.md를 이 파일로 통합. 2026-06-04 갱신)
 > 작업 디렉터리: `/home/aero-mere/wiq/Where_is_the_question`
 
 ---
@@ -77,7 +77,11 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 ## 6. 다음 작업 (사용자 요청, 2026-06-03)
 
 1. ~~**즐겨찾기 별표 버그**~~ **해결 (2026-06-04, 실기기 확인 완료)**: ChatGPT가 대화 턴 요소를 div→article로 바꿔 `div[data-testid^=...]` CSS의 position:relative가 빗나가던 것이 원인. CSS 셀렉터 태그 한정 제거 + JS에서 래퍼가 static이면 인라인 relative 보정. 별 위치는 래퍼 좌상단 기준 `left: 210px` (사용자 조정 결과).
-2. ~~**첨부파일 툴팁 형식 변경**~~ **구현 완료 (2026-06-04, Reviewer APPROVED, 실기기 확인 대기)**: `[ ]` 감싸기 전면 제거. `extractQuestionData`가 첨부 확장자 목록을 모아 첫 줄에 `*png 첨부` / `*이미지, pdf 첨부` 형식으로 출력 (파일명 없는 이미지=`이미지`, 확장자 없으면 `파일`, 중복 제거). `buildStructuredTextFromPlain`의 느슨한 파일명 추측 정규식(오작동 원인)과 `formatTooltipHtml`의 `[ ]` 기반 줄바꿈 강제 삽입 블록 삭제.
+2. ~~**첨부파일 툴팁 형식 변경**~~ **완료 (2026-06-04, 실기기 확인 완료)**: 여러 차례 발전 — 최종 상태:
+   - `extractQuestionData`(config.js)가 첨부 정보를 첫 줄 `*<레이블> 첨부` 형식으로 출력. 레이블은 **실제 파일명**(예: `*기숙사 거주 사실 확인서.pdf 첨부`), 파일명 없는 이미지 업로드는 `이미지`. 복수면 `, `로 연결. 이 문자열 형식은 popup.js도 소비하므로 **변경 금지**.
+   - ChatGPT 신규 파일 카드 DOM 대응: 파일명은 `.truncate.font-semibold`, 종류 라벨은 `.truncate.text-token-text-secondary`(본문 제외 처리). 구 `data-testid^="file-attachment"` 셀렉터는 호환용 유지.
+   - **툴팁 2박스 구조**(content.css + content.js `createMarkerElement`/`showTooltip`): `.question-marker-tooltip`은 투명 래퍼(위치/가시성만), 자식으로 `.witq-tooltip-attachment`(회색 #6b6b6b, 첨부 줄 전용) + `.witq-tooltip-main`(어두운 #2c2c2c, 본문, max-height 100px). showTooltip이 정규식 `/^\*((?:(?!<br>).)*첨부)(?:<br>|$)/`로 첨부 줄을 분리해 회색 박스에 넣고(선두 `*`는 표시에서 제거), 첨부/본문이 비면 해당 박스 display:none.
+   - **이미지 전용 질문 마커 버그 수정** (`10dea2c`): 이미지만 올린 질문은 innerText가 비어 모든 식별 경로에서 누락되던 것을 `getPlainIdentity(el)` 헬퍼(content.js)로 해결 — 텍스트가 비면 질문 래퍼에 `<img>` 존재 시 상수 `'이미지 첨부'`를 식별자로 사용. 식별자 추출 7곳 전부 이 헬퍼로 통일. 이미지 전용 질문이 여러 개면 occurrence 접미사로 구분(중복 텍스트와 동일 시맨틱).
 3. **지원 사이트 확장**: 현재 ChatGPT/Gemini만 지원. 요즘 많이 쓰는 챗봇형 AI 조사(Claude, Grok 등) 후 전부 지원 목표. (`config.js` 사이트 분기 구조 확장 + `manifest.json` matches 추가 — manifest는 Director가 수정)
 
 추가 완료 (2026-06-04): 미사용 코드 제거 — `clearScanCache`(재스캔 정책 이후 고아), `getQuestions` 도달 불가 폴백, `createMarkerElement`/`updateMarkerElement`의 미사용 container 파라미터.
@@ -99,7 +103,7 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 ## 9. 다음 세션 재개 순서
 
-1. 이 문서 Read → `git log --oneline -5`로 상태 확인 (마지막: `79bb871` long page fix 5 + 문서 통합 커밋).
+1. 이 문서 Read → `git log --oneline -5`로 상태 확인 (마지막: `10dea2c` 이미지 전용 질문 마커 수정).
 2. Coder/Reviewer 서브에이전트 스폰 (프로젝트 CLAUDE.md의 시스템 프롬프트 사용).
-3. 5장(짧은→긴 클릭) 실기기 결과 확인 → **6장 1(즐겨찾기 별표)→2(첨부 툴팁)→3(사이트 확장)** 순서로.
+3. 남은 작업: **6장 3(지원 사이트 확장)** — Claude, Grok 등 조사 후 config.js 분기 + manifest matches(Director 수정) 확장. 그 외 LOW 항목들.
 4. 각 수정마다: 디스크 검증(node --check + 테스트) → Reviewer → 사용자 실기기 테스트 → main 커밋+푸시.
