@@ -96,33 +96,13 @@ class MarkerManager {
 
     buildStructuredTextFromPlain(plain) {
         if (!plain) return '';
+        // 아이콘 노이즈 제거 후 you said 제거, 공백 정리, HTML 이스케이프
         const withoutIcons = String(plain)
             .replace(/\[[^\]]*icon[^\]]*\]/ig, ' ')
             .replace(/\([^\)]*icon[^\)]*\)/ig, ' ')
             .trim();
-
-        const splitByYouSaid = withoutIcons.split(/\byou\s*said\b\s*:?\s*/i);
-        if (splitByYouSaid.length >= 2) {
-            const left = window.WITQ.text.normalizeFileName(splitByYouSaid[0].trim());
-            const right = splitByYouSaid.slice(1).join(' ').trim();
-            if (left && right) {
-                return `[${window.WITQ.text.escapeHtml(left)}]<br>${window.WITQ.text.escapeHtml(right)}`;
-            }
-        }
-
-        const removedYouSaid = window.WITQ.text.stripYouSaid(withoutIcons).replace(/\s+/g, ' ').trim();
-        const fileThenQuestion =
-            removedYouSaid.match(/^(.+?\.[a-z0-9]{2,8})\s+(.+)$/i) ||
-            removedYouSaid.match(/^(.+?[a-z0-9]{2,8})(.+)$/i);
-        if (fileThenQuestion) {
-            const fileName = window.WITQ.text.normalizeFileName(fileThenQuestion[1]);
-            const question = fileThenQuestion[2].trim();
-            if (fileName && question) {
-                return `[${window.WITQ.text.escapeHtml(fileName)}]<br>${window.WITQ.text.escapeHtml(question)}`;
-            }
-        }
-
-        return window.WITQ.text.escapeHtml(removedYouSaid);
+        const cleaned = window.WITQ.text.stripYouSaid(withoutIcons).replace(/\s+/g, ' ').trim();
+        return window.WITQ.text.escapeHtml(cleaned);
     }
 
     scheduleWarmupUpdates() {
@@ -395,14 +375,6 @@ class MarkerManager {
             .replace(/\([^\)]*icon[^\)]*\)\s*/ig, '')
             .replace(/\byou\s*said\b\s*:?\s*/ig, ' ')
             .trim();
-
-        // 파일 토큰과 질문 텍스트 사이에 줄바꿈 강제 삽입
-        if (!/<br\s*\/?>/i.test(html)) {
-            html = html.replace(/(\[[^\]]+\])\s+(.+)/, '$1<br>$2');
-            html = html.replace(/(\b[^\s<>]+\.[a-z0-9]{2,8}\b)\s+(.+)/i, '$1<br>$2');
-            html = html.replace(/(\b[^\s<>]+\.[a-z0-9]{2,8}\b)(?=[^\s<])/i, '$1<br>');
-            html = html.replace(/(\[[^\]]+\])(?=[^\s<])/, '$1<br>');
-        }
 
         return html;
     }

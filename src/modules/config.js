@@ -161,16 +161,25 @@ window.WITQ.config = {
         const rawMainText = getCleanText(container, containerSelectorsToRemove || []).trim();
         const mainText = window.WITQ.text.stripYouSaid(rawMainText).replace(/\s+/g, ' ').trim();
 
-        const parts = [];
+        // 첨부 종류(확장자) 목록 수집 — 중복 제거, 순서 유지
+        const attachmentTypes = [];
         if (imageUploadCount > 0) {
-            parts.push(imageUploadCount > 1 ? '[Uploaded images]' : '[Uploaded image]');
+            attachmentTypes.push('이미지');
         }
-        fileNames.forEach(name => parts.push(`[${name}]`));
+        fileNames.forEach(name => {
+            const extMatch = name.match(/\.([a-z0-9]{2,8})$/i);
+            const ext = extMatch ? extMatch[1].toLowerCase() : '파일';
+            if (!attachmentTypes.includes(ext)) attachmentTypes.push(ext);
+        });
 
         const outputLines = [];
-        if (parts.length > 0) outputLines.push(...parts);
-        if (mainText) outputLines.push(mainText);
-        return outputLines.map(line => window.WITQ.text.escapeHtml(line)).join('<br>');
+        if (attachmentTypes.length > 0) {
+            // 예: "*png 첨부" 또는 "*이미지, pdf 첨부"
+            const label = attachmentTypes.join(', ');
+            outputLines.push(window.WITQ.text.escapeHtml(`*${label} 첨부`));
+        }
+        if (mainText) outputLines.push(window.WITQ.text.escapeHtml(mainText));
+        return outputLines.join('<br>');
     },
 
     isQuestion: function(text) {

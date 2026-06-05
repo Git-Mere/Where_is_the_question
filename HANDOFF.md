@@ -49,7 +49,7 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 **실기기 확인 완료**: 긴 페이지 새로고침 → 스캔 → 전체 질문 마커 생성 → 즉시 점프 착지 모두 정상. 긴→짧은 SPA 이동 정상. 짧은↔짧은 정상.
 
-## 5. 짧은→긴 SPA 재진입 클릭 부정확 — 앵커 기반 탐색으로 재수정 (2026-06-04, 실기기 확인 대기)
+## 5. 짧은→긴 SPA 재진입 클릭 부정확 — 앵커 기반 탐색으로 재수정 (2026-06-04, **실기기 확인 완료**)
 
 1차 수정(루프마다 비례 재스케일링)은 실기기에서 실패. **원인: 비례 스케일링 모델 자체가 오류** — 재진입 시 ChatGPT는 맨 아래 일부만 렌더하고 위쪽 미렌더 콘텐츠는 높이를 거의 차지하지 않으므로 "균등 압축" 가정이 깨짐.
 
@@ -76,9 +76,11 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 ## 6. 다음 작업 (사용자 요청, 2026-06-03)
 
-1. **즐겨찾기 별표 버그**: 즐겨찾기 추가 시 질문 본문 옆에 별표(★)를 그려 직접 스크롤할 때 식별하게 하는 기능인데, **페이지 맨 위 질문에만 별이 1개 생기고 그 다음 것들은 안 생김**. (`content.js` `updateMarkerElement`의 별표 부착 로직 / `getQuestionWrapper` 의심)
-2. **첨부파일 툴팁 형식 변경**: 현재 첨부물을 `[ ]`로 감싸 표시하는데, 글만 있는 질문에서도 일부 텍스트가 의미 없이 `[ ]`로 감싸지는 오작동 있음. **`[ ]` 방식 제거**하고, png/pdf/docx 등 첨부 감지 시 툴팁 **첫 줄에 `*png 첨부` 형식**으로 표시. (`config.js` 첨부 추출 + `content.js` `formatTooltipHtml` 정리)
+1. ~~**즐겨찾기 별표 버그**~~ **해결 (2026-06-04, 실기기 확인 완료)**: ChatGPT가 대화 턴 요소를 div→article로 바꿔 `div[data-testid^=...]` CSS의 position:relative가 빗나가던 것이 원인. CSS 셀렉터 태그 한정 제거 + JS에서 래퍼가 static이면 인라인 relative 보정. 별 위치는 래퍼 좌상단 기준 `left: 210px` (사용자 조정 결과).
+2. ~~**첨부파일 툴팁 형식 변경**~~ **구현 완료 (2026-06-04, Reviewer APPROVED, 실기기 확인 대기)**: `[ ]` 감싸기 전면 제거. `extractQuestionData`가 첨부 확장자 목록을 모아 첫 줄에 `*png 첨부` / `*이미지, pdf 첨부` 형식으로 출력 (파일명 없는 이미지=`이미지`, 확장자 없으면 `파일`, 중복 제거). `buildStructuredTextFromPlain`의 느슨한 파일명 추측 정규식(오작동 원인)과 `formatTooltipHtml`의 `[ ]` 기반 줄바꿈 강제 삽입 블록 삭제.
 3. **지원 사이트 확장**: 현재 ChatGPT/Gemini만 지원. 요즘 많이 쓰는 챗봇형 AI 조사(Claude, Grok 등) 후 전부 지원 목표. (`config.js` 사이트 분기 구조 확장 + `manifest.json` matches 추가 — manifest는 Director가 수정)
+
+추가 완료 (2026-06-04): 미사용 코드 제거 — `clearScanCache`(재스캔 정책 이후 고아), `getQuestions` 도달 불가 폴백, `createMarkerElement`/`updateMarkerElement`의 미사용 container 파라미터.
 
 미뤄둔 LOW 항목(이전부터): isQuestion 한국어 판별 개선, 레이아웃 스래싱, 메시지 편집/재생성/삭제 시 재스캔, `__witqMM` 노출 debug 게이팅. (해소됨: scanHeight stale → 재스캔 정책, 연타 가드 → navToken)
 
