@@ -935,15 +935,21 @@ class MarkerManager {
             const entry = this.markers.get(id);
             if (!entry) return;
 
-            const currentFavorites = await window.WITQ.storage.getFavorites();
-            const isFavorite = currentFavorites.some(fav => fav.id === id);
-            const updatedFavorites = isFavorite
-                ? currentFavorites.filter(fav => fav.id !== id)
-                : [...currentFavorites, { id, text: entry.text, position: entry.position }];
+            try {
+                const currentFavorites = await window.WITQ.storage.getFavorites();
+                const isFavorite = currentFavorites.some(fav => fav.id === id);
+                const updatedFavorites = isFavorite
+                    ? currentFavorites.filter(fav => fav.id !== id)
+                    : [...currentFavorites, { id, text: entry.text, position: entry.position }];
 
-            chrome.storage.local.set({ favorites: updatedFavorites });
-            this.favorites = updatedFavorites;
-            this.scheduleUpdate(true, 60);
+                chrome.storage.local.set({ favorites: updatedFavorites });
+                this.favorites = updatedFavorites;
+                this.scheduleUpdate(true, 60);
+            } catch (err) {
+                // 확장 재로드로 컨텍스트가 죽은 고아 인스턴스: 스스로 정리하고 침묵
+                // (에러 패널에 unhandled rejection이 쌓이는 것 방지)
+                if (!chrome.runtime || !chrome.runtime.id) this.destroy();
+            }
         });
 
         // 초기 위치/상태 설정 (분모는 호출부에서 전달한 effHeight 사용)

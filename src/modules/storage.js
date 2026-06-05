@@ -20,11 +20,17 @@ window.WITQ.storage = {
 
     getFavorites: function() {
         return new Promise((resolve, reject) => {
-            if (!chrome.runtime || !chrome.storage) return reject(new Error("Extension context not available."));
-            chrome.storage.local.get({ favorites: [] }, (result) => {
-                if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-                resolve(result.favorites);
-            });
+            // runtime.id가 없으면 확장 재로드로 컨텍스트가 죽은 고아 인스턴스
+            if (!chrome.runtime || !chrome.runtime.id || !chrome.storage) return reject(new Error("Extension context not available."));
+            try {
+                chrome.storage.local.get({ favorites: [] }, (result) => {
+                    if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+                    resolve(result.favorites);
+                });
+            } catch (e) {
+                // 가드 통과 직후 컨텍스트가 무효화되면 동기 throw 가능
+                reject(e);
+            }
         });
     },
 
