@@ -115,29 +115,26 @@ window.WITQ.config = {
             claude: {
                 questionSelector: '[data-testid="user-message"], .font-user-message',
                 getQuestionElements: () => {
-                    const primary = Array.from(document.querySelectorAll('[data-testid="user-message"]'));
+                    // SPA 전환 잔존 프레임([data-testid="chat-stale-nav-inert"], inert + aria-hidden)
+                    // 안의 요소는 이전 화면 캐시이므로 질문 수집에서 전부 제외 (2026-06-04 라이브 검증)
+                    const isLive = el => !el.closest('[inert], [aria-hidden="true"]');
 
-                    // 첨부 전용 턴 수집 1 (안전망): [data-test-render-count] 래퍼 중
-                    // user-message가 없고 file-thumbnail이 있는 것.
+                    const primary = Array.from(document.querySelectorAll('[data-testid="user-message"]'))
+                        .filter(isLive);
+
+                    // 첨부 전용 턴: user-message 없이 첨부 썸네일만 있는 턴.
+                    // 문서 파일 썸네일은 [data-testid="file-thumbnail"]이지만 이미지 썸네일은
+                    // data-testid가 파일명이라, 공통 클래스 group/thumbnail로 식별 (2026-06-04 라이브 검증).
+                    // 어시스턴트 턴은 첨부 썸네일을 사용하지 않는다는 가정.
                     const attachmentOnlyTurns = Array.from(
                         document.querySelectorAll('[data-test-render-count]')
                     ).filter(turn =>
+                        isLive(turn) &&
                         !turn.querySelector('[data-testid="user-message"]') &&
-                        turn.querySelector('[data-testid="file-thumbnail"]')
+                        turn.querySelector('[data-testid="file-thumbnail"], [class*="group/thumbnail"]')
                     );
 
-                    // 첨부 전용 턴 수집 2: 라이브 검증(2026-06-04) 결과 첨부 전용 질문은
-                    // 턴 래퍼/user-message 없이 썸네일 그리드(div.grid.grid-cols-[...])만 렌더됨.
-                    // 래퍼 밖 썸네일의 그리드 컨테이너를 질문 요소로 사용.
-                    // form 내부는 입력창에 첨부 대기 중인 파일이므로 제외.
-                    const orphanGrids = [];
-                    document.querySelectorAll('[data-testid="file-thumbnail"]').forEach(th => {
-                        if (th.closest('[data-test-render-count]') || th.closest('form')) return;
-                        const grid = th.closest('div[class*="grid-cols"]');
-                        if (grid && !orphanGrids.includes(grid)) orphanGrids.push(grid);
-                    });
-
-                    const combined = [...primary, ...attachmentOnlyTurns, ...orphanGrids];
+                    const combined = [...primary, ...attachmentOnlyTurns];
 
                     if (combined.length === 0) {
                         // 폴백: 구 UI 클래스
