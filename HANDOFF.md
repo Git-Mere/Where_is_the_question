@@ -21,9 +21,9 @@
 | Coder (서브에이전트) | claude-sonnet-4-6 | 코드 구현 |
 | Reviewer (서브에이전트) | claude-sonnet-4-6 | 리뷰, APPROVED/REJECTED 판정 |
 
-- 워크플로: 요구 명확화 → Coder 작업 → Director 디스크 검증 → Reviewer 리뷰 → (REJECTED면 최대 3회 재작업) → 사용자 실기기 테스트.
+- 워크플로: 요구 명확화 → Coder 작업 → Director 디스크 검증 → Reviewer 리뷰 → (REJECTED면 최대 3회 재작업) → **즉시 커밋+푸시** → 사용자 실기기 테스트 (문제 발견 시 후속 수정 커밋).
 - **Coder/Reviewer는 README.md / HANDOFF.md / PRIVACY_POLICY.md / manifest.json 절대 수정 금지** (Director 소유).
-- 모든 소통 한국어. 커밋은 main에 직접(사용자 확정 방침). **작업 완료 후 커밋+푸시까지 Director가 수행** (2026-06-04 사용자 지시로 변경).
+- 모든 소통 한국어. 커밋은 main에 직접(사용자 확정 방침). **작업 완료 직후 항상 커밋+푸시까지 Director가 수행 — 실기기 테스트를 기다리지 않음** (2026-06-04 사용자 지시).
 - 서브에이전트는 세션 한정 → 새 세션에서 다시 스폰. SendMessage는 이름이 아니라 **agentId**로 보내야 함.
 
 ## 3. 아키텍처 스냅샷
@@ -95,7 +95,7 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 | 2 | Claude | 회색 박스 전혀 안 뜸 + **첨부만 있는 질문은 마커 자체가 안 생김** | 파일 셀렉터가 `img`뿐이라 파일 카드 미인식. 첨부 전용 질문은 innerText 빈 값 + `getPlainIdentity`의 `img` 폴백도 미적중 → 식별 실패. Claude 첨부 카드 셀렉터 추가 + getPlainIdentity 폴백 확장 필요 |
 | 3 | Grok | png은 회색 박스 자체가 안 생기고, pdf 등은 **본문 박스에 섞여 나옴** | 이미지가 `img[alt="image"]` 형태가 아닌 듯(미인식), 파일 카드는 셀렉터 없음 → 파일명이 본문으로 샘. DOM 샘플 필요 |
 | 4 | Perplexity | 본문+첨부 조합에서 어떤 첨부든 회색 박스 안 뜸. **즐겨찾기 별 안 나옴** | 파일 셀렉터 `img`뿐. 별은 wrapper=questionEl(h1 등)이라 별 위치(left:210px)가 요소 밖/가려짐 추정 → wrapper 분기 또는 별 배치 방식 개선과 함께 해결 |
-| 5 | 공통 | **별 위치가 사이트마다 뒤죽박죽** | 현재 별은 wrapper 기준 CSS 고정값(top:10px, left:210px) — ChatGPT/Gemini 튜닝값이라 사이트별로 어긋남. **통일안**: CSS 고정값 대신 JS에서 질문 요소 `getBoundingClientRect()` 기준 상대 배치(예: 버블 좌측 바깥 일정 오프셋)로 전환 → 사이트 불문 일관 위치 |
+| 5 | 공통 | ~~**별 위치가 사이트마다 뒤죽박죽**~~ **구현 완료 (2026-06-04, Reviewer APPROVED, 실기기 확인 대기)** | CSS 고정값 제거, `positionFavoriteStar`(content.js)가 질문 버블 rect 기준 버블 좌측 8px 바깥에 배치. left<0이면 0 클램프(Perplexity처럼 wrapper=질문 요소인 사이트는 버블 좌상단에 겹침 허용). 기존 별도 매 업데이트마다 재배치. 4번의 "별 안 보임"도 해소 기대 |
 
 공통 진행 방법: 1~4는 각 사이트에서 첨부 포함 질문을 F12로 검사한 **outerHTML 샘플을 사용자에게 받아** 셀렉터를 확정하는 것이 가장 빠름 (문헌 조사로는 첨부 DOM까지 안 나옴). 5는 DOM 샘플 불필요, 바로 구현 가능.
 
@@ -120,5 +120,5 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 1. 이 문서 Read → `git log --oneline -5`로 상태 확인 (마지막: `10dea2c` 이미지 전용 질문 마커 수정).
 2. Coder/Reviewer 서브에이전트 스폰 (프로젝트 CLAUDE.md의 시스템 프롬프트 사용).
-3. 남은 작업: **6장 "다음 업데이트 목록" 1~5** — 별 위치 통일(5번, DOM 샘플 불필요)부터 하거나, 사용자에게 각 사이트 첨부 질문의 outerHTML 샘플을 받아 1~4번 셀렉터 확정. 그 외 LOW 항목들.
-4. 각 수정마다: 디스크 검증(node --check + 테스트) → Reviewer → 사용자 실기기 테스트 → main 커밋+푸시.
+3. 남은 작업: **6장 "다음 업데이트 목록" 1~4** — 사용자에게 각 사이트 첨부 질문의 outerHTML 샘플을 받아 셀렉터 확정. 5번(별 위치 통일)은 구현 완료, 실기기 확인 대기. 그 외 LOW 항목들.
+4. 각 수정마다: 디스크 검증(node --check + 테스트) → Reviewer → **즉시 main 커밋+푸시** → 사용자 실기기 테스트.
