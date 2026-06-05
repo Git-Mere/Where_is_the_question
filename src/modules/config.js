@@ -64,8 +64,10 @@ window.WITQ.config = {
                     return this.extractQuestionData(
                         scopedUserNode || conversationTurn || questionElement,
                         '.text-base',
-                        ['img[alt]', 'div[data-testid^="file-attachment"] .font-medium'],
-                        ['div[data-testid^="file-attachment"]', '.image-upload-item']
+                        // .truncate.font-semibold: 현행 파일 카드의 파일명 (testid 방식은 구 DOM 호환용 유지)
+                        ['img[alt]', 'div[data-testid^="file-attachment"] .font-medium', '.truncate.font-semibold'],
+                        // 파일명/종류 라벨("PDF" 등)이 본문 텍스트로 새지 않게 제외
+                        ['div[data-testid^="file-attachment"]', '.image-upload-item', '.truncate.font-semibold', '.truncate.text-token-text-secondary']
                     );
                 }
             },
