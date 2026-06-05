@@ -82,7 +82,22 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
    - ChatGPT 신규 파일 카드 DOM 대응: 파일명은 `.truncate.font-semibold`, 종류 라벨은 `.truncate.text-token-text-secondary`(본문 제외 처리). 구 `data-testid^="file-attachment"` 셀렉터는 호환용 유지.
    - **툴팁 2박스 구조**(content.css + content.js `createMarkerElement`/`showTooltip`): `.question-marker-tooltip`은 투명 래퍼(위치/가시성만), 자식으로 `.witq-tooltip-attachment`(회색 #6b6b6b, 첨부 줄 전용) + `.witq-tooltip-main`(어두운 #2c2c2c, 본문, max-height 100px). showTooltip이 정규식 `/^\*((?:(?!<br>).)*첨부)(?:<br>|$)/`로 첨부 줄을 분리해 회색 박스에 넣고(선두 `*`는 표시에서 제거), 첨부/본문이 비면 해당 박스 display:none.
    - **이미지 전용 질문 마커 버그 수정** (`10dea2c`): 이미지만 올린 질문은 innerText가 비어 모든 식별 경로에서 누락되던 것을 `getPlainIdentity(el)` 헬퍼(content.js)로 해결 — 텍스트가 비면 질문 래퍼에 `<img>` 존재 시 상수 `'이미지 첨부'`를 식별자로 사용. 식별자 추출 7곳 전부 이 헬퍼로 통일. 이미지 전용 질문이 여러 개면 occurrence 접미사로 구분(중복 텍스트와 동일 시맨틱).
-3. **지원 사이트 확장**: 현재 ChatGPT/Gemini만 지원. 요즘 많이 쓰는 챗봇형 AI 조사(Claude, Grok 등) 후 전부 지원 목표. (`config.js` 사이트 분기 구조 확장 + `manifest.json` matches 추가 — manifest는 Director가 수정)
+3. **지원 사이트 확장 — 1차 구현 완료 (2026-06-04, Reviewer APPROVED, 실기기 1차 테스트 완료)**: Claude(claude.ai) / Grok(grok.com) / Perplexity(perplexity.ai) 추가. DeepSeek은 해시 클래스(빌드마다 변경)라 **사용자 결정으로 보류**.
+   - 셀렉터 출처: 오픈소스 익스포터 조사 (revivalstack/ai-chat-exporter 2026-03, ckep1/pplxport 2026-04 등). claude=`[data-testid="user-message"]`(폴백 `.font-user-message`), grok=`div[id^="response-"]` 행 중 `.response-content-markdown` 없는 행의 `.message-bubble`(폴백 `.items-end`), perplexity=`[class*="group/query"]`(폴백 `.whitespace-pre-line.text-pretty.break-words`).
+   - getQuestionWrapper: claude=`[data-test-render-count]`, grok=`div[id^="response-"]`, perplexity=기본(questionEl). dom.js는 제네릭 폴백으로 충분해 무수정. manifest matches 4개 추가(Director).
+   - **실기기 결과 (2026-06-04)**: 마커 생성/호버/클릭 이동은 5개 사이트 전부 정상. 남은 문제는 아래 "다음 업데이트 목록".
+
+### 다음 업데이트 목록 (2026-06-04 실기기 테스트 결과, 미해결)
+
+| # | 사이트 | 증상 | 추정 원인 / 접근 |
+|---|---|---|---|
+| 1 | Gemini | png만 회색 박스에 뜨고, 그 외 파일(pdf 등)은 **본문 박스에 섞여 나옴** | gemini 브랜치의 파일 카드 셀렉터(`.file-attachment-card` 등)가 현행 DOM과 불일치 → 파일명이 본문 텍스트로 샘. 실기기 DOM 샘플 필요 |
+| 2 | Claude | 회색 박스 전혀 안 뜸 + **첨부만 있는 질문은 마커 자체가 안 생김** | 파일 셀렉터가 `img`뿐이라 파일 카드 미인식. 첨부 전용 질문은 innerText 빈 값 + `getPlainIdentity`의 `img` 폴백도 미적중 → 식별 실패. Claude 첨부 카드 셀렉터 추가 + getPlainIdentity 폴백 확장 필요 |
+| 3 | Grok | png은 회색 박스 자체가 안 생기고, pdf 등은 **본문 박스에 섞여 나옴** | 이미지가 `img[alt="image"]` 형태가 아닌 듯(미인식), 파일 카드는 셀렉터 없음 → 파일명이 본문으로 샘. DOM 샘플 필요 |
+| 4 | Perplexity | 본문+첨부 조합에서 어떤 첨부든 회색 박스 안 뜸. **즐겨찾기 별 안 나옴** | 파일 셀렉터 `img`뿐. 별은 wrapper=questionEl(h1 등)이라 별 위치(left:210px)가 요소 밖/가려짐 추정 → wrapper 분기 또는 별 배치 방식 개선과 함께 해결 |
+| 5 | 공통 | **별 위치가 사이트마다 뒤죽박죽** | 현재 별은 wrapper 기준 CSS 고정값(top:10px, left:210px) — ChatGPT/Gemini 튜닝값이라 사이트별로 어긋남. **통일안**: CSS 고정값 대신 JS에서 질문 요소 `getBoundingClientRect()` 기준 상대 배치(예: 버블 좌측 바깥 일정 오프셋)로 전환 → 사이트 불문 일관 위치 |
+
+공통 진행 방법: 1~4는 각 사이트에서 첨부 포함 질문을 F12로 검사한 **outerHTML 샘플을 사용자에게 받아** 셀렉터를 확정하는 것이 가장 빠름 (문헌 조사로는 첨부 DOM까지 안 나옴). 5는 DOM 샘플 불필요, 바로 구현 가능.
 
 추가 완료 (2026-06-04): 미사용 코드 제거 — `clearScanCache`(재스캔 정책 이후 고아), `getQuestions` 도달 불가 폴백, `createMarkerElement`/`updateMarkerElement`의 미사용 container 파라미터.
 
@@ -105,5 +120,5 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 1. 이 문서 Read → `git log --oneline -5`로 상태 확인 (마지막: `10dea2c` 이미지 전용 질문 마커 수정).
 2. Coder/Reviewer 서브에이전트 스폰 (프로젝트 CLAUDE.md의 시스템 프롬프트 사용).
-3. 남은 작업: **6장 3(지원 사이트 확장)** — Claude, Grok 등 조사 후 config.js 분기 + manifest matches(Director 수정) 확장. 그 외 LOW 항목들.
+3. 남은 작업: **6장 "다음 업데이트 목록" 1~5** — 별 위치 통일(5번, DOM 샘플 불필요)부터 하거나, 사용자에게 각 사이트 첨부 질문의 outerHTML 샘플을 받아 1~4번 셀렉터 확정. 그 외 LOW 항목들.
 4. 각 수정마다: 디스크 검증(node --check + 테스트) → Reviewer → 사용자 실기기 테스트 → main 커밋+푸시.
