@@ -77,10 +77,7 @@ class MarkerManager {
     // --- Marker Management ---
 
     getQuestions() {
-        if (this.config && typeof this.config.getQuestionElements === 'function') {
-            return this.config.getQuestionElements();
-        }
-        return Array.from(document.querySelectorAll(this.config.questionSelector));
+        return this.config.getQuestionElements();
     }
 
     getQuestionWrapper(questionEl) {
@@ -278,7 +275,7 @@ class MarkerManager {
 
                 let existing = this.markers.get(id);
                 if (!existing) {
-                    const marker = this.createMarkerElement(id, liveEl, entryData, container, effHeight);
+                    const marker = this.createMarkerElement(id, liveEl, entryData, effHeight);
                     this.scrollbarContainer.appendChild(marker);
                     existing = { marker, element: liveEl, position: entryData.position, text: entryData.text, isQuestion: entryData.isQuestion };
                     this.markers.set(id, existing);
@@ -288,7 +285,7 @@ class MarkerManager {
                     existing.position = entryData.position;
                     existing.text = entryData.text;
                     existing.isQuestion = entryData.isQuestion;
-                    this.updateMarkerElement(existing.marker, liveEl, entryData, container, effHeight);
+                    this.updateMarkerElement(existing.marker, liveEl, entryData, effHeight);
                 }
 
                 questionsForPopup.push({
@@ -854,8 +851,8 @@ class MarkerManager {
 
     // --- 마커 DOM 생성/갱신 ---
 
-    // id와 현재 라이브 요소(null 가능), 초기 데이터, 컨테이너/effHeight(% 분모)를 받아 마커 DOM 생성
-    createMarkerElement(id, initialElement, initialData, container, effHeight) {
+    // id와 현재 라이브 요소(null 가능), 초기 데이터, effHeight(% 분모)를 받아 마커 DOM 생성
+    createMarkerElement(id, initialElement, initialData, effHeight) {
         const marker = document.createElement('div');
         marker.className = 'question-marker';
 
@@ -937,12 +934,12 @@ class MarkerManager {
 
         // 초기 위치/상태 설정 (분모는 호출부에서 전달한 effHeight 사용)
         if (initialData) {
-            this.updateMarkerElement(marker, initialElement, initialData, container, effHeight);
+            this.updateMarkerElement(marker, initialElement, initialData, effHeight);
         }
         return marker;
     }
 
-    updateMarkerElement(marker, questionEl, data, container, totalHeight) {
+    updateMarkerElement(marker, questionEl, data, totalHeight) {
         marker.classList.toggle('is-question', data.isQuestion);
 
         const isFavorite = this.favorites.some(fav => fav.id === data.id);

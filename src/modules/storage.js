@@ -18,10 +18,6 @@ window.WITQ.storage = {
         this._scanCache.set(key, list);
     },
 
-    clearScanCache: function(key) {
-        this._scanCache.delete(key);
-    },
-
     getFavorites: function() {
         return new Promise((resolve, reject) => {
             if (!chrome.runtime || !chrome.storage) return reject(new Error("Extension context not available."));
