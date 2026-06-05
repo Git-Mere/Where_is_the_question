@@ -953,6 +953,22 @@ class MarkerManager {
         return marker;
     }
 
+    // 별표를 래퍼 내에서 질문 버블 좌측에 맞게 배치한다.
+    // append 이후 호출해야 offsetWidth를 올바르게 측정할 수 있다.
+    positionFavoriteStar(star, questionWrapper, questionEl) {
+        const wRect = questionWrapper.getBoundingClientRect();
+        const qRect = questionEl.getBoundingClientRect();
+        // offsetWidth가 아직 0이면 font-size 기준 폴백 사용
+        const starWidth = star.offsetWidth || 64;
+        // 별의 우측 끝이 질문 버블 좌측 가장자리에서 8px 왼쪽에 오도록 배치
+        let left = qRect.left - wRect.left - starWidth - 8;
+        // 래퍼 왼쪽으로 넘치면 클램프 (overflow 클리핑으로 잘리는 것 방지)
+        if (left < 0) left = 0;
+        const top = qRect.top - wRect.top;
+        star.style.left = `${left}px`;
+        star.style.top = `${top}px`;
+    }
+
     updateMarkerElement(marker, questionEl, data, totalHeight) {
         marker.classList.toggle('is-question', data.isQuestion);
 
@@ -965,17 +981,22 @@ class MarkerManager {
             const existingStar = questionWrapper ? questionWrapper.querySelector('.witq-favorite-star') : null;
 
             if (isFavorite) {
-                if (!existingStar && questionWrapper) {
+                if (questionWrapper) {
                     // 별표는 absolute 포지셔닝: 래퍼가 containing block이 아니면
                     // 먼 조상 기준으로 배치돼 페이지 상단에 겹쳐 쌓인다.
                     // 사이트 DOM 변경으로 CSS 규칙이 빗나가도 인라인으로 보정.
                     if (window.getComputedStyle(questionWrapper).position === 'static') {
                         questionWrapper.style.position = 'relative';
                     }
-                    const star = document.createElement('div');
-                    star.className = 'witq-favorite-star';
-                    star.textContent = '★';
-                    questionWrapper.appendChild(star);
+                    const star = existingStar || (() => {
+                        const s = document.createElement('div');
+                        s.className = 'witq-favorite-star';
+                        s.textContent = '★';
+                        questionWrapper.appendChild(s);
+                        return s;
+                    })();
+                    // 새로 추가한 경우도 기존 별도 매번 위치 갱신 (리사이즈/레이아웃 변화 대응)
+                    this.positionFavoriteStar(star, questionWrapper, questionEl);
                 }
             } else if (existingStar) {
                 existingStar.remove();
