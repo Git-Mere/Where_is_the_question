@@ -14,6 +14,9 @@ window.WITQ.config = {
         const { hostname } = window.location;
         if (hostname.includes('chat.openai.com') || hostname.includes('chatgpt.com')) return 'chatgpt';
         if (hostname.includes('gemini.google.com')) return 'gemini';
+        if (hostname.includes('claude.ai')) return 'claude';
+        if (hostname.includes('grok.com')) return 'grok';
+        if (hostname.includes('perplexity.ai')) return 'perplexity';
         return 'unknown';
     },
 
@@ -104,6 +107,52 @@ window.WITQ.config = {
                         ],
                         ['.file-attachment-card', '.upload-preview-container']
                     );
+                }
+            },
+            claude: {
+                questionSelector: '[data-testid="user-message"], .font-user-message',
+                getQuestionElements: () => {
+                    const primary = Array.from(document.querySelectorAll('[data-testid="user-message"]'));
+                    if (primary.length > 0) return primary;
+                    // 폴백: 구 UI 클래스
+                    return Array.from(document.querySelectorAll('.font-user-message'));
+                },
+                getQuestionText: (questionElement) => {
+                    // 첨부 썸네일 img의 alt가 파일명인 경우가 있어 img를 파일 셀렉터로 사용
+                    return this.extractQuestionData(questionElement, null, ['img'], []);
+                }
+            },
+            grok: {
+                questionSelector: 'div[id^="response-"] .message-bubble',
+                getQuestionElements: () => {
+                    // 행 단위로 순회: AI 답변 마커(.response-content-markdown)가 없는 행이 사용자 메시지
+                    const rows = Array.from(document.querySelectorAll('div[id^="response-"]'));
+                    const userBubbles = [];
+                    rows.forEach(row => {
+                        if (row.querySelector('.response-content-markdown')) return;
+                        const bubble = row.querySelector('.message-bubble');
+                        if (bubble) userBubbles.push(bubble);
+                    });
+                    if (userBubbles.length > 0) return userBubbles;
+                    // 폴백: 오른쪽 정렬(.items-end) 행 전체
+                    return rows.filter(row =>
+                        row.classList.contains('items-end') || row.querySelector(':scope > .items-end')
+                    );
+                },
+                getQuestionText: (questionElement) => {
+                    return this.extractQuestionData(questionElement, null, ['img'], []);
+                }
+            },
+            perplexity: {
+                questionSelector: 'h1[class*="group/query"], div[class*="group/query"]',
+                getQuestionElements: () => {
+                    const primary = Array.from(document.querySelectorAll('h1[class*="group/query"], div[class*="group/query"]'));
+                    if (primary.length > 0) return primary;
+                    // 폴백: 질문 텍스트 블록 클래스
+                    return Array.from(document.querySelectorAll('.whitespace-pre-line.text-pretty.break-words'));
+                },
+                getQuestionText: (questionElement) => {
+                    return this.extractQuestionData(questionElement, null, ['img'], []);
                 }
             },
             unknown: {

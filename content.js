@@ -91,6 +91,13 @@ class MarkerManager {
         if (this.site === 'chatgpt') {
             return questionEl.closest('[data-testid^="conversation-turn"]') || questionEl;
         }
+        if (this.site === 'claude') {
+            // 각 메시지를 감싸는 렌더 래퍼 (없으면 질문 요소 자체)
+            return questionEl.closest('[data-test-render-count]') || questionEl;
+        }
+        if (this.site === 'grok') {
+            return questionEl.closest('div[id^="response-"]') || questionEl;
+        }
         return questionEl;
     }
 
