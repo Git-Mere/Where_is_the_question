@@ -830,6 +830,18 @@ class MarkerManager {
 
         const tooltip = document.createElement('div');
         tooltip.className = 'question-marker-tooltip';
+
+        // 첨부 정보 회색 박스 (기본 숨김)
+        const attachmentBox = document.createElement('div');
+        attachmentBox.className = 'witq-tooltip-attachment';
+        attachmentBox.style.display = 'none';
+
+        // 질문 본문 어두운 박스
+        const mainBox = document.createElement('div');
+        mainBox.className = 'witq-tooltip-main';
+
+        tooltip.appendChild(attachmentBox);
+        tooltip.appendChild(mainBox);
         marker.appendChild(tooltip);
 
         let hideTooltipTimer = null;
@@ -849,7 +861,18 @@ class MarkerManager {
                 }
             }
 
-            tooltip.innerHTML = this.formatTooltipHtml(displayText);
+            const html = this.formatTooltipHtml(displayText);
+            // 첨부 줄("*... 첨부")은 회색 박스로 분리, 나머지는 본문 박스에
+            const attachMatch = html.match(/^\*((?:(?!<br>).)*첨부)(?:<br>|$)/);
+            if (attachMatch) {
+                attachmentBox.innerHTML = attachMatch[1];
+                attachmentBox.style.display = '';
+            } else {
+                attachmentBox.style.display = 'none';
+            }
+            const mainHtml = attachMatch ? html.slice(attachMatch[0].length) : html;
+            mainBox.innerHTML = mainHtml;
+            mainBox.style.display = mainHtml ? '' : 'none';
             tooltip.style.visibility = 'visible';
             tooltip.style.opacity = '0';
 
