@@ -117,11 +117,8 @@ window.WITQ.config = {
                 getQuestionElements: () => {
                     const primary = Array.from(document.querySelectorAll('[data-testid="user-message"]'));
 
-                    // 첨부 전용 턴 수집: [data-test-render-count] 래퍼 중
-                    // user-message가 없고 file-thumbnail이 있는 것만 선택.
-                    // 어시스턴트 턴도 같은 래퍼를 쓰지만 file-thumbnail은 사용하지 않으므로
-                    // "user-message 부재 + file-thumbnail 존재" 조합으로 사용자 첨부 전용 턴을 식별.
-                    // (2026-06-04 실기기 DOM 샘플 기준)
+                    // 첨부 전용 턴 수집 1 (안전망): [data-test-render-count] 래퍼 중
+                    // user-message가 없고 file-thumbnail이 있는 것.
                     const attachmentOnlyTurns = Array.from(
                         document.querySelectorAll('[data-test-render-count]')
                     ).filter(turn =>
@@ -129,7 +126,18 @@ window.WITQ.config = {
                         turn.querySelector('[data-testid="file-thumbnail"]')
                     );
 
-                    const combined = [...primary, ...attachmentOnlyTurns];
+                    // 첨부 전용 턴 수집 2: 라이브 검증(2026-06-04) 결과 첨부 전용 질문은
+                    // 턴 래퍼/user-message 없이 썸네일 그리드(div.grid.grid-cols-[...])만 렌더됨.
+                    // 래퍼 밖 썸네일의 그리드 컨테이너를 질문 요소로 사용.
+                    // form 내부는 입력창에 첨부 대기 중인 파일이므로 제외.
+                    const orphanGrids = [];
+                    document.querySelectorAll('[data-testid="file-thumbnail"]').forEach(th => {
+                        if (th.closest('[data-test-render-count]') || th.closest('form')) return;
+                        const grid = th.closest('div[class*="grid-cols"]');
+                        if (grid && !orphanGrids.includes(grid)) orphanGrids.push(grid);
+                    });
+
+                    const combined = [...primary, ...attachmentOnlyTurns, ...orphanGrids];
 
                     if (combined.length === 0) {
                         // 폴백: 구 UI 클래스
