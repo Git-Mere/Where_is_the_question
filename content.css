@@ -78,12 +78,12 @@
     pointer-events: none;
 }
 
-/* 즐겨찾기 별표: 질문 메시지 박스 바로 왼쪽 (top/right는 JS가 실측으로 지정) */
+/* 즐겨찾기 별표 */
 .witq-favorite-star {
     position: absolute;
-    transform: translateY(-50%);  /* top이 박스 세로 중앙을 가리키므로 자체 높이 보정 */
-    font-size: 28px;
-    line-height: 1;
+    top: 10px;
+    left: 110px;
+    font-size: 64px;
     color: rgba(255, 238, 0, 0.9);
     z-index: 10;
     pointer-events: none;
