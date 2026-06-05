@@ -172,6 +172,9 @@ class MarkerManager {
             if (this.lastUrl !== location.href) {
                 this.lastUrl = location.href;
                 this.resetMarkers();
+                // 대화 진입 시마다 재스캔 허용: 캐시는 유지(마커 즉시 표시)하되
+                // 스캔 완료 표식을 지워 긴 페이지면 자동 스캔이 다시 돌게 한다.
+                this.scannedKeys.delete(window.WITQ.storage.getConversationKey());
                 this.scheduleWarmupUpdates();
                 this.startObserver();
             }

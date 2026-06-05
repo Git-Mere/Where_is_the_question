@@ -59,7 +59,10 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 - 1차 수정에서 유지된 것: 케이스 1 stale element 해시 검증, 해시+근접 매칭, found 시 entry.element 갱신, basePosition 캐시 직독.
 - **디버그 로그 추가**: `[WITQ] nav {case}`, `nav attempt {attempt, jumpPos, anchorCachePos, anchors, liveHeight, found}`, `nav give-up`.
 
-추가 미해결: **스캔 속도 최적화(quietStreak)가 실기기에서 체감 효과 없음** — 가상화 스크롤 스텝마다 mutation이 발생해 streak이 안 쌓이는 것으로 의심. `[WITQ] scan step` 로그의 quietStreak 값 확인 필요.
+스캔 속도 최적화(quietStreak)는 **실기기에서 확실히 빨라짐 확인** (2026-06-04).
+
+### 정책 변경 (2026-06-04, 사용자 결정): 대화 진입 시마다 재스캔
+스캔이 빨라진 것을 계기로, SPA 재진입 시 캐시만 재사용하는 복잡한 경로를 줄이기 위해 **URL 변경 시 새 대화 키를 `scannedKeys`에서 삭제** → 긴 페이지면 자동 스캔이 매 진입마다 다시 돈다. 기존 캐시는 유지되어 재진입 직후 마커가 즉시 뜨고, 스캔 완료 시 갱신됨. 캐시 낡음(scanHeight stale, 새 메시지 추가) 문제도 함께 해소. 앵커 기반 클릭 탐색은 스캔 후에도 언마운트 대상 착지에 필요하므로 유지.
 
 - 디버깅: `chrome.storage.local.set({witqDebug:true})` 후 콘솔에서 `[WITQ] update {..., totalHeight, scanHeight, effHeight}` 확인. `window.__witqMM`으로 인스턴스 접근 가능.
 
