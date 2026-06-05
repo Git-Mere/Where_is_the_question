@@ -960,10 +960,10 @@ class MarkerManager {
         const qRect = questionEl.getBoundingClientRect();
         // offsetWidth가 아직 0이면 font-size 기준 폴백 사용
         const starWidth = star.offsetWidth || 64;
-        // 별의 우측 끝이 질문 버블 좌측 가장자리에서 8px 왼쪽에 오도록 배치
-        let left = qRect.left - wRect.left - starWidth - 8;
-        // 래퍼 왼쪽으로 넘치면 클램프 (overflow 클리핑으로 잘리는 것 방지)
-        if (left < 0) left = 0;
+        // 별의 우측 끝이 질문 버블 좌측 가장자리에서 8px 왼쪽에 오도록 배치.
+        // 래퍼=질문 요소인 사이트(Perplexity)는 음수가 되어 박스 왼쪽 바깥에 나간다.
+        // (0으로 클램프하면 별이 질문 텍스트를 가려서 클램프하지 않음)
+        const left = qRect.left - wRect.left - starWidth - 8;
         const top = qRect.top - wRect.top;
         star.style.left = `${left}px`;
         star.style.top = `${top}px`;
