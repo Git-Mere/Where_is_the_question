@@ -163,21 +163,17 @@ window.WITQ.config = {
         const rawMainText = getCleanText(container, containerSelectorsToRemove || []).trim();
         const mainText = window.WITQ.text.stripYouSaid(rawMainText).replace(/\s+/g, ' ').trim();
 
-        // 첨부 종류(확장자) 목록 수집 — 중복 제거, 순서 유지
-        const attachmentTypes = [];
+        // 첨부 파일명 목록 수집 — 이미지 업로드는 '이미지' 레이블, 나머지는 실제 파일명
+        const attachmentLabels = [];
         if (imageUploadCount > 0) {
-            attachmentTypes.push('이미지');
+            attachmentLabels.push('이미지');
         }
-        fileNames.forEach(name => {
-            const extMatch = name.match(/\.([a-z0-9]{2,8})$/i);
-            const ext = extMatch ? extMatch[1].toLowerCase() : '파일';
-            if (!attachmentTypes.includes(ext)) attachmentTypes.push(ext);
-        });
+        fileNames.forEach(name => attachmentLabels.push(name));
 
         const outputLines = [];
-        if (attachmentTypes.length > 0) {
-            // 예: "*png 첨부" 또는 "*이미지, pdf 첨부"
-            const label = attachmentTypes.join(', ');
+        if (attachmentLabels.length > 0) {
+            // 예: "*기숙사 거주 사실 확인서.pdf 첨부" 또는 "*이미지, 보고서.pdf 첨부"
+            const label = attachmentLabels.join(', ');
             outputLines.push(window.WITQ.text.escapeHtml(`*${label} 첨부`));
         }
         if (mainText) outputLines.push(window.WITQ.text.escapeHtml(mainText));
