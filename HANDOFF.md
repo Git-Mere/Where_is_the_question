@@ -91,7 +91,7 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 | # | 사이트 | 증상 | 추정 원인 / 접근 |
 |---|---|---|---|
-| 1 | Gemini | png만 회색 박스에 뜨고, 그 외 파일(pdf 등)은 **본문 박스에 섞여 나옴** | gemini 브랜치의 파일 카드 셀렉터(`.file-attachment-card` 등)가 현행 DOM과 불일치 → 파일명이 본문 텍스트로 샘. 실기기 DOM 샘플 필요 |
+| 1 | Gemini | ~~png만 회색 박스에 뜨고, 그 외 파일(pdf 등)은 **본문 박스에 섞여 나옴**~~ **수정 완료 (2026-06-04, 실기기 확인 대기)** | 사용자 제공 DOM 샘플로 확정: 현행 파일 칩은 `.user-query-container > .file-preview-container > ... > button.new-file-preview-file`(aria-label=확장자 포함 전체 파일명, 내부에 `.extension-label`/`.filename-label`). 칩 버튼을 파일명 셀렉터에 추가, `.file-preview-container`를 본문 제외 목록에 추가, `img`는 `:not(.luminous-file-icon)`으로 한정(파일 종류 아이콘 alt "DOCX icon" 오인 방지) |
 | 2 | Claude | 회색 박스 전혀 안 뜸 + **첨부만 있는 질문은 마커 자체가 안 생김** | 파일 셀렉터가 `img`뿐이라 파일 카드 미인식. 첨부 전용 질문은 innerText 빈 값 + `getPlainIdentity`의 `img` 폴백도 미적중 → 식별 실패. Claude 첨부 카드 셀렉터 추가 + getPlainIdentity 폴백 확장 필요 |
 | 3 | Grok | png은 회색 박스 자체가 안 생기고, pdf 등은 **본문 박스에 섞여 나옴** | 이미지가 `img[alt="image"]` 형태가 아닌 듯(미인식), 파일 카드는 셀렉터 없음 → 파일명이 본문으로 샘. DOM 샘플 필요 |
 | 4 | ~~Perplexity~~ | **사이트 자체를 지원 제외 (2026-06-04 사용자 결정)** | 별이 질문 박스를 가리는 문제(클램프 제거로도 미해결)가 계기. 코드/manifest에서 제거 완료 |

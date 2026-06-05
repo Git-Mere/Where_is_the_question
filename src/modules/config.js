@@ -93,6 +93,8 @@ window.WITQ.config = {
                         userQuery || questionElement,
                         '.query-text',
                         [
+                            // 현행 파일 칩: aria-label에 확장자 포함 전체 파일명 (예: "Instruction.pdf")
+                            'button.new-file-preview-file',
                             '.file-attachment-card .filename',
                             '.file-attachment-card [data-file-name]',
                             '.file-attachment-card [title]',
@@ -102,9 +104,11 @@ window.WITQ.config = {
                             '.query-with-attachments-container [aria-label]',
                             '.query-with-attachments-container a[href]',
                             '.query-with-attachments-container button[title]',
-                            'img'
+                            // 파일 종류 아이콘(alt "DOCX icon" 등)은 파일명이 아니므로 제외
+                            'img:not(.luminous-file-icon)'
                         ],
-                        ['.file-attachment-card', '.upload-preview-container']
+                        // .file-preview-container: 현행 파일 칩 영역 ("PDF", 파일명 라벨이 본문으로 새는 것 방지)
+                        ['.file-attachment-card', '.upload-preview-container', '.file-preview-container']
                     );
                 }
             },
