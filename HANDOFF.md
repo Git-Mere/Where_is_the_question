@@ -101,7 +101,7 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 추가 완료 (2026-06-04): 미사용 코드 제거 — `clearScanCache`(재스캔 정책 이후 고아), `getQuestions` 도달 불가 폴백, `createMarkerElement`/`updateMarkerElement`의 미사용 container 파라미터. 고아 인스턴스(확장 재로드 후 F5 안 한 탭)의 `Extension context invalidated` unhandled rejection 수정 — `getFavorites`에 `chrome.runtime.id` 가드, 우클릭 핸들러 catch + 컨텍스트 사망 시 `destroy()`.
 
-미뤄둔 LOW 항목(이전부터): 레이아웃 스래싱, `__witqMM` 노출 debug 게이팅. (제외 판정 2026-06-05: 메시지 편집/재생성/삭제 시 재스캔 — 사용자 결정으로 커버 안 함, 편집 후에는 사용자가 새로고침하는 것으로 충분) (해소됨: scanHeight stale → 재스캔 정책, 연타 가드 → navToken. 제외 판정 2026-06-05: isQuestion 한국어 판별 — `is-question` 클래스를 참조하는 CSS/JS가 없어 기능 자체가 죽어 있음(개선 무의미, 오히려 데드 코드 정리 후보). 짧은→긴 재진입 클릭 버그 — 사용자 확인 결과 이미 해결됨)
+~~미뤄둔 LOW 항목~~ **전부 처리 완료 (2026-06-05)**: 레이아웃 스래싱 — 즐겨찾기 별 배치를 starJobs 큐로 모아 updateMarkers 루프 뒤에서 읽기 전부→쓰기 전부 순으로 일괄 처리(강제 리플로우 1회로 수렴, 배치 컨텍스트 없으면 positionFavoriteStar 단건 폴백 유지). `__witqMM` 게이팅 — witqDebug 켜짐일 때만 initialize에서 노출, destroy 시 자기 참조면 삭제(8장 디버그 방법은 storage 플래그 방식이라 그대로 유효). (제외 판정 2026-06-05: 메시지 편집/재생성/삭제 시 재스캔 — 사용자 결정으로 커버 안 함, 편집 후에는 사용자가 새로고침하는 것으로 충분) (해소됨: scanHeight stale → 재스캔 정책, 연타 가드 → navToken. 제외 판정 2026-06-05: isQuestion 한국어 판별 — `is-question` 클래스를 참조하는 CSS/JS가 없어 기능 자체가 죽어 있음(개선 무의미, 오히려 데드 코드 정리 후보). 짧은→긴 재진입 클릭 버그 — 사용자 확인 결과 이미 해결됨)
 
 ## 7. 제약 (반드시 지킬 것)
 

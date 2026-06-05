@@ -51,6 +51,9 @@ class MarkerManager {
             if (r && r.witqDebug) this.debug = true;
         } catch (e) {}
 
+        // 디버그 모드일 때만 DevTools용 핸들 노출 (격리 월드 콘솔에서 __witqMM로 접근)
+        if (this.debug) window.__witqMM = this;
+
         try {
             this.favorites = await window.WITQ.storage.getFavorites();
             this.scheduleUpdate(true, 0);
@@ -72,6 +75,7 @@ class MarkerManager {
             cancelAnimationFrame(this.updateRafId);
             this.updateRafId = null;
         }
+        if (window.__witqMM === this) delete window.__witqMM;
     }
 
     // --- Marker Management ---
@@ -274,13 +278,15 @@ class MarkerManager {
             const sortedEntries = Array.from(unionById.values())
                 .sort((a, b) => a.position - b.position);
 
+            const starJobs = [];
+
             for (const entryData of sortedEntries) {
                 const id = entryData.id;
                 const liveEl = liveById.has(id) ? liveById.get(id).element : null;
 
                 let existing = this.markers.get(id);
                 if (!existing) {
-                    const marker = this.createMarkerElement(id, liveEl, entryData, effHeight);
+                    const marker = this.createMarkerElement(id, liveEl, entryData, effHeight, starJobs);
                     this.scrollbarContainer.appendChild(marker);
                     existing = { marker, element: liveEl, position: entryData.position, text: entryData.text, isQuestion: entryData.isQuestion };
                     this.markers.set(id, existing);
@@ -290,7 +296,7 @@ class MarkerManager {
                     existing.position = entryData.position;
                     existing.text = entryData.text;
                     existing.isQuestion = entryData.isQuestion;
-                    this.updateMarkerElement(existing.marker, liveEl, entryData, effHeight);
+                    this.updateMarkerElement(existing.marker, liveEl, entryData, effHeight, starJobs);
                 }
 
                 questionsForPopup.push({
@@ -299,6 +305,26 @@ class MarkerManager {
                     position: entryData.position,
                     isQuestion: entryData.isQuestion
                 });
+            }
+
+            // 3. 즐겨찾기 별 일괄 배치 — 읽기(rect/offsetWidth 측정) 전부 → 쓰기(style) 전부 순으로
+            // 묶어, 별마다 강제 리플로우가 반복되는 레이아웃 스래싱을 방지 (측정 1회로 수렴)
+            if (starJobs.length > 0) {
+                const measured = starJobs.map(job => {
+                    const wRect = job.wrapper.getBoundingClientRect();
+                    const qRect = job.el.getBoundingClientRect();
+                    // offsetWidth가 아직 0이면 font-size 기준 폴백 (positionFavoriteStar와 동일)
+                    const starWidth = job.star.offsetWidth || 64;
+                    return {
+                        star: job.star,
+                        left: qRect.left - wRect.left - starWidth - 8,
+                        top: qRect.top - wRect.top
+                    };
+                });
+                for (const m of measured) {
+                    m.star.style.left = `${m.left}px`;
+                    m.star.style.top = `${m.top}px`;
+                }
             }
 
             // 방어적 청소: this.markers에 속하지 않은 잔존 자식 요소 제거
@@ -849,7 +875,7 @@ class MarkerManager {
     // --- 마커 DOM 생성/갱신 ---
 
     // id와 현재 라이브 요소(null 가능), 초기 데이터, effHeight(% 분모)를 받아 마커 DOM 생성
-    createMarkerElement(id, initialElement, initialData, effHeight) {
+    createMarkerElement(id, initialElement, initialData, effHeight, starJobs) {
         const marker = document.createElement('div');
         marker.className = 'question-marker';
 
@@ -960,7 +986,7 @@ class MarkerManager {
 
         // 초기 위치/상태 설정 (분모는 호출부에서 전달한 effHeight 사용)
         if (initialData) {
-            this.updateMarkerElement(marker, initialElement, initialData, effHeight);
+            this.updateMarkerElement(marker, initialElement, initialData, effHeight, starJobs);
         }
         return marker;
     }
@@ -981,7 +1007,7 @@ class MarkerManager {
         star.style.top = `${top}px`;
     }
 
-    updateMarkerElement(marker, questionEl, data, totalHeight) {
+    updateMarkerElement(marker, questionEl, data, totalHeight, starJobs) {
         marker.classList.toggle('is-question', data.isQuestion);
 
         const isFavorite = this.favorites.some(fav => fav.id === data.id);
@@ -1008,7 +1034,12 @@ class MarkerManager {
                         return s;
                     })();
                     // 새로 추가한 경우도 기존 별도 매번 위치 갱신 (리사이즈/레이아웃 변화 대응)
-                    this.positionFavoriteStar(star, questionWrapper, questionEl);
+                    if (starJobs) {
+                        starJobs.push({ star, wrapper: questionWrapper, el: questionEl });
+                    } else {
+                        // 단건 호출 폴백 (배치 컨텍스트가 없을 때)
+                        this.positionFavoriteStar(star, questionWrapper, questionEl);
+                    }
                 }
             } else if (existingStar) {
                 existingStar.remove();
@@ -1146,9 +1177,9 @@ if (!window.__WITQ_HISTORY_HOOKED__) {
     };
 }
 
-// 안전한 지연 초기화 (인스턴스를 노출해 DevTools에서 __witqMM.debug = true 가능)
+// 안전한 지연 초기화. 디버그 핸들(__witqMM)은 witqDebug 켜짐일 때만 initialize에서 노출
 if (document.readyState === 'complete') {
-    window.__witqMM = new MarkerManager();
+    new MarkerManager();
 } else {
-    window.addEventListener('load', () => { window.__witqMM = new MarkerManager(); });
+    window.addEventListener('load', () => { new MarkerManager(); });
 }
