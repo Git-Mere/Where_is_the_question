@@ -951,17 +951,25 @@ class MarkerManager {
             const existingStar = questionWrapper ? questionWrapper.querySelector('.witq-favorite-star') : null;
 
             if (isFavorite) {
-                if (!existingStar && questionWrapper) {
-                    // 별표는 absolute 포지셔닝: 래퍼가 containing block이 아니면
-                    // 먼 조상 기준으로 배치돼 페이지 상단에 겹쳐 쌓인다.
-                    // 사이트 DOM 변경으로 CSS 규칙이 빗나가도 인라인으로 보정.
-                    if (window.getComputedStyle(questionWrapper).position === 'static') {
-                        questionWrapper.style.position = 'relative';
+                if (questionWrapper) {
+                    let star = existingStar;
+                    if (!star) {
+                        // 별표는 absolute 포지셔닝: 래퍼가 containing block이 아니면
+                        // 먼 조상 기준으로 배치돼 페이지 상단에 겹쳐 쌓인다.
+                        // 사이트 DOM 변경으로 CSS 규칙이 빗나가도 인라인으로 보정.
+                        if (window.getComputedStyle(questionWrapper).position === 'static') {
+                            questionWrapper.style.position = 'relative';
+                        }
+                        star = document.createElement('div');
+                        star.className = 'witq-favorite-star';
+                        star.textContent = '★';
+                        questionWrapper.appendChild(star);
                     }
-                    const star = document.createElement('div');
-                    star.className = 'witq-favorite-star';
-                    star.textContent = '★';
-                    questionWrapper.appendChild(star);
+                    // 질문 메시지 박스 바로 왼쪽에 정렬 (박스 위치 실측, 갱신 시마다 보정)
+                    const wRect = questionWrapper.getBoundingClientRect();
+                    const bRect = questionEl.getBoundingClientRect();
+                    star.style.right = `${Math.round(wRect.right - bRect.left + 8)}px`;
+                    star.style.top = `${Math.round(bRect.top - wRect.top + bRect.height / 2)}px`;
                 }
             } else if (existingStar) {
                 existingStar.remove();
