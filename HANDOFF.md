@@ -49,14 +49,17 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 **실기기 확인 완료**: 긴 페이지 새로고침 → 스캔 → 전체 질문 마커 생성 → 즉시 점프 착지 모두 정상. 긴→짧은 SPA 이동 정상. 짧은↔짧은 정상.
 
-## 5. 짧은→긴 SPA 재진입 클릭 부정확 — 수정 완료 (2026-06-04, 실기기 최종 확인 대기)
+## 5. 짧은→긴 SPA 재진입 클릭 부정확 — 앵커 기반 탐색으로 재수정 (2026-06-04, 실기기 확인 대기)
 
-`content.js` `navigateToQuestion` 재작성 (Reviewer APPROVED, 테스트 31/31):
-1. **루프마다 재스케일링**: `computeJumpPos()` 클로저가 매 시도마다 현재 scrollHeight를 재측정해 점프 위치 갱신 (stale jumpPos가 주범이었음).
-2. **스케일링 기준 position을 스캔 캐시에서 직접 읽음** — `entry.position` 오염과 무관하게 항상 스캔 좌표계 기준.
-3. **매칭 교체**: occurrence 순번 id 비교(부분 DOM에서 깨짐) → 텍스트 해시 일치 + 예상 위치 최근접 선택.
-4. **케이스 1 stale element 가드**: `document.body.contains`에 더해 텍스트 해시 검증, 불일치 시 케이스 2 폴백.
-5. **found 시 `entry.element = found` 갱신** — 연속 클릭 이중 스케일링 차단.
+1차 수정(루프마다 비례 재스케일링)은 실기기에서 실패. **원인: 비례 스케일링 모델 자체가 오류** — 재진입 시 ChatGPT는 맨 아래 일부만 렌더하고 위쪽 미렌더 콘텐츠는 높이를 거의 차지하지 않으므로 "균등 압축" 가정이 깨짐.
+
+2차 수정 — `navigateToQuestion` 케이스 2를 **앵커 기반 탐색**으로 교체 (Reviewer APPROVED):
+- 스캔 캐시 position = 완전 렌더 상태의 실제 px. 마운트된 질문 중 캐시 유일 해시로 식별되는 앵커를 찾아 `jumpPos = 앵커 라이브 실측 + (목표 캐시 pos - 앵커 캐시 pos)`. 점프→렌더→더 가까운 앵커로 재추정하며 수렴 (maxAttempts 8).
+- 앵커 없으면 기존 비례 스케일링 폴백. 중복 텍스트 해시(count>1)는 앵커 제외.
+- 1차 수정에서 유지된 것: 케이스 1 stale element 해시 검증, 해시+근접 매칭, found 시 entry.element 갱신, basePosition 캐시 직독.
+- **디버그 로그 추가**: `[WITQ] nav {case}`, `nav attempt {attempt, jumpPos, anchorCachePos, anchors, liveHeight, found}`, `nav give-up`.
+
+추가 미해결: **스캔 속도 최적화(quietStreak)가 실기기에서 체감 효과 없음** — 가상화 스크롤 스텝마다 mutation이 발생해 streak이 안 쌓이는 것으로 의심. `[WITQ] scan step` 로그의 quietStreak 값 확인 필요.
 
 - 디버깅: `chrome.storage.local.set({witqDebug:true})` 후 콘솔에서 `[WITQ] update {..., totalHeight, scanHeight, effHeight}` 확인. `window.__witqMM`으로 인스턴스 접근 가능.
 
