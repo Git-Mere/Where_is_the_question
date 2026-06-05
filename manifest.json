@@ -30,9 +30,7 @@
         "https://chatgpt.com/*",
         "https://gemini.google.com/*",
         "https://claude.ai/*",
-        "https://grok.com/*",
-        "https://perplexity.ai/*",
-        "https://www.perplexity.ai/*"
+        "https://grok.com/*"
       ],
       "js": [
         "src/modules/text.js",

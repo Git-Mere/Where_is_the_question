@@ -16,7 +16,6 @@ window.WITQ.config = {
         if (hostname.includes('gemini.google.com')) return 'gemini';
         if (hostname.includes('claude.ai')) return 'claude';
         if (hostname.includes('grok.com')) return 'grok';
-        if (hostname.includes('perplexity.ai')) return 'perplexity';
         return 'unknown';
     },
 
@@ -138,18 +137,6 @@ window.WITQ.config = {
                     return rows.filter(row =>
                         row.classList.contains('items-end') || row.querySelector(':scope > .items-end')
                     );
-                },
-                getQuestionText: (questionElement) => {
-                    return this.extractQuestionData(questionElement, null, ['img'], []);
-                }
-            },
-            perplexity: {
-                questionSelector: 'h1[class*="group/query"], div[class*="group/query"]',
-                getQuestionElements: () => {
-                    const primary = Array.from(document.querySelectorAll('h1[class*="group/query"], div[class*="group/query"]'));
-                    if (primary.length > 0) return primary;
-                    // 폴백: 질문 텍스트 블록 클래스
-                    return Array.from(document.querySelectorAll('.whitespace-pre-line.text-pretty.break-words'));
                 },
                 getQuestionText: (questionElement) => {
                     return this.extractQuestionData(questionElement, null, ['img'], []);
