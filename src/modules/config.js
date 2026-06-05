@@ -289,20 +289,6 @@ window.WITQ.config = {
         return outputLines.join('<br>');
     },
 
-    isQuestion: function(text) {
-        if (!text || text.length < 2) return false;
-        const cleanText = text.replace(/<[^>]+>/g, ' ').trim();
-        if (!cleanText) return false;
-
-        if (/\?$/.test(cleanText)) return true;
-
-        const lowerText = cleanText.toLowerCase();
-        if (/^(what|where|when|who|why|how|is|are|can|could|would|do|does|did|will|should|may|might)\s/.test(lowerText)) {
-            return true;
-        }
-
-        return false;
-    }
 };
 
 window.WITQ.config.initialize();

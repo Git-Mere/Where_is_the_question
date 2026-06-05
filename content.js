@@ -8,6 +8,8 @@ class MarkerManager {
         this.minUpdateInterval = 180;
         this.lastUpdateTime = 0;
         this.favorites = [];
+        // 마커 갱신 루프의 O(1) 즐겨찾기 판정용
+        this.favoriteIds = new Set();
         this.site = window.WITQ.config.site;
         this.config = window.WITQ.config.config;
         this.scrollbarContainer = null;
@@ -15,7 +17,7 @@ class MarkerManager {
         this.observerTarget = null;
         this.observerRetryTimer = null;
         this.observerRetryCount = 0;
-        // ID 기반 마커 맵: id -> { marker, element|null, position, text, isQuestion }
+        // ID 기반 마커 맵: id -> { marker, element|null, position, text }
         this.markers = new Map();
         this.questionDataCache = new WeakMap(); // DOM 요소 -> 파싱된 데이터 캐시
         this.lastUrl = location.href;
@@ -56,6 +58,7 @@ class MarkerManager {
 
         try {
             this.favorites = await window.WITQ.storage.getFavorites();
+            this.favoriteIds = new Set(this.favorites.map(f => f.id));
             this.scheduleUpdate(true, 0);
             this.scheduleWarmupUpdates();
         } catch (e) {}
@@ -76,6 +79,18 @@ class MarkerManager {
             this.updateRafId = null;
         }
         if (window.__witqMM === this) delete window.__witqMM;
+        // 등록된 이벤트 리스너 해제 (고아 인스턴스의 메모리 누수 방지)
+        if (this.onRuntimeMessage) {
+            try { chrome.runtime.onMessage.removeListener(this.onRuntimeMessage); } catch (e) {}
+        }
+        if (this.onStorageChanged) {
+            try { chrome.storage.onChanged.removeListener(this.onStorageChanged); } catch (e) {}
+        }
+        if (this.onWindowResize) window.removeEventListener('resize', this.onWindowResize);
+        if (this.onNavChange) {
+            window.removeEventListener('popstate', this.onNavChange);
+            window.removeEventListener('witq:urlchange', this.onNavChange);
+        }
     }
 
     // --- Marker Management ---
@@ -288,22 +303,20 @@ class MarkerManager {
                 if (!existing) {
                     const marker = this.createMarkerElement(id, liveEl, entryData, effHeight, starJobs);
                     this.scrollbarContainer.appendChild(marker);
-                    existing = { marker, element: liveEl, position: entryData.position, text: entryData.text, isQuestion: entryData.isQuestion };
+                    existing = { marker, element: liveEl, position: entryData.position, text: entryData.text };
                     this.markers.set(id, existing);
                 } else {
                     // 라이브 요소 레퍼런스 갱신
                     existing.element = liveEl;
                     existing.position = entryData.position;
                     existing.text = entryData.text;
-                    existing.isQuestion = entryData.isQuestion;
                     this.updateMarkerElement(existing.marker, liveEl, entryData, effHeight, starJobs);
                 }
 
                 questionsForPopup.push({
                     id,
                     text: entryData.text,
-                    position: entryData.position,
-                    isQuestion: entryData.isQuestion
+                    position: entryData.position
                 });
             }
 
@@ -389,8 +402,7 @@ class MarkerManager {
                 detailedText: null,
                 position: currentPos,
                 index,
-                id: this.generateQuestionId(question, plainFallback, allQuestions || this.getQuestions()),
-                isQuestion: window.WITQ.config.isQuestion(plainFallback)
+                id: this.generateQuestionId(question, plainFallback, allQuestions || this.getQuestions())
             };
             this.questionDataCache.set(question, cached);
         }
@@ -561,10 +573,9 @@ class MarkerManager {
                     const id = this.generateQuestionId(el, plain, allQuestionsSnapshot);
                     const position = window.WITQ.dom.getQuestionPositionInContainer(el, container);
                     const text = this.buildStructuredTextFromPlain(plain);
-                    const isQuestion = window.WITQ.config.isQuestion(plain);
 
                     // 이미 본 ID는 위치 값을 최신으로 덮어씀 (더 정확한 측정값)
-                    collected.set(id, { id, text, position, isQuestion });
+                    collected.set(id, { id, text, position });
                     stepCount++;
                     if (position > maxSeenTop) maxSeenTop = position;
                 }
@@ -976,6 +987,7 @@ class MarkerManager {
 
                 chrome.storage.local.set({ favorites: updatedFavorites });
                 this.favorites = updatedFavorites;
+                this.favoriteIds = new Set(this.favorites.map(f => f.id));
                 this.scheduleUpdate(true, 60);
             } catch (err) {
                 // 확장 재로드로 컨텍스트가 죽은 고아 인스턴스: 스스로 정리하고 침묵
@@ -1008,9 +1020,7 @@ class MarkerManager {
     }
 
     updateMarkerElement(marker, questionEl, data, totalHeight, starJobs) {
-        marker.classList.toggle('is-question', data.isQuestion);
-
-        const isFavorite = this.favorites.some(fav => fav.id === data.id);
+        const isFavorite = this.favoriteIds.has(data.id);
         marker.classList.toggle('favorite', isFavorite);
 
         // 즐겨찾기 별표는 DOM에 있는 요소에만 붙임 (가상화로 unmount된 경우 skip)
@@ -1053,7 +1063,7 @@ class MarkerManager {
     // --- 이벤트 / 상태 관리 ---
 
     setupEventListeners() {
-        chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        this.onRuntimeMessage = (message, sender, sendResponse) => {
             if (message.type === 'scrollToQuestion') {
                 // id가 있으면 2단계 이동(가상화 대응), 없으면 단일 스크롤 폴백(하위호환)
                 if (message.id) {
@@ -1067,16 +1077,19 @@ class MarkerManager {
                 sendResponse({ status: 'processing' });
             }
             return true;
-        });
+        };
+        chrome.runtime.onMessage.addListener(this.onRuntimeMessage);
 
-        chrome.storage.onChanged.addListener((changes, namespace) => {
+        this.onStorageChanged = (changes, namespace) => {
             if (namespace === 'local' && changes.favorites) {
                 this.favorites = changes.favorites.newValue || [];
+                this.favoriteIds = new Set(this.favorites.map(f => f.id));
                 this.scheduleUpdate(true, 0);
             }
-        });
+        };
+        chrome.storage.onChanged.addListener(this.onStorageChanged);
 
-        window.addEventListener('resize', () => {
+        this.onWindowResize = () => {
             clearTimeout(this.resizeDebounceTimer);
             this.resizeDebounceTimer = setTimeout(() => {
                 // 크기 불변(포커스 전환 등)이면 무동작
@@ -1088,21 +1101,17 @@ class MarkerManager {
                 this.startObserver();           // 컨테이너가 바뀌었을 수 있으니 옵저버 재부착
                 this.scheduleUpdate(true, 0);   // 강제 업데이트 → 렌더된 마커 실측 재측정 + 전체 재배치
             }, 1000);
-        });
+        };
+        window.addEventListener('resize', this.onWindowResize);
 
-        // SPA 네비게이션 지원
-        window.addEventListener('popstate', () => {
+        // SPA 네비게이션 지원 (popstate + pushState/replaceState 감지 공용 핸들러)
+        this.onNavChange = () => {
             this.startObserver();
             this.scheduleWarmupUpdates();
             this.scheduleUpdate(true, 0);
-        });
-
-        // pushState/replaceState 감지 (후크에서 발생)
-        window.addEventListener('witq:urlchange', () => {
-            this.startObserver();
-            this.scheduleWarmupUpdates();
-            this.scheduleUpdate(true, 0);
-        });
+        };
+        window.addEventListener('popstate', this.onNavChange);
+        window.addEventListener('witq:urlchange', this.onNavChange);
     }
 
     startObserver() {

@@ -103,6 +103,12 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 ~~미뤄둔 LOW 항목~~ **전부 처리 완료 (2026-06-05)**: 레이아웃 스래싱 — 즐겨찾기 별 배치를 starJobs 큐로 모아 updateMarkers 루프 뒤에서 읽기 전부→쓰기 전부 순으로 일괄 처리(강제 리플로우 1회로 수렴, 배치 컨텍스트 없으면 positionFavoriteStar 단건 폴백 유지). `__witqMM` 게이팅 — witqDebug 켜짐일 때만 initialize에서 노출, destroy 시 자기 참조면 삭제(8장 디버그 방법은 storage 플래그 방식이라 그대로 유효). (제외 판정 2026-06-05: 메시지 편집/재생성/삭제 시 재스캔 — 사용자 결정으로 커버 안 함, 편집 후에는 사용자가 새로고침하는 것으로 충분) (해소됨: scanHeight stale → 재스캔 정책, 연타 가드 → navToken. 제외 판정 2026-06-05: isQuestion 한국어 판별 — `is-question` 클래스를 참조하는 CSS/JS가 없어 기능 자체가 죽어 있음(개선 무의미, 오히려 데드 코드 정리 후보). 짧은→긴 재진입 클릭 버그 — 사용자 확인 결과 이미 해결됨)
 
+### 전체 코드 감사 및 정리 (2026-06-05, Reviewer APPROVED)
+
+적용: (1) isQuestion 기능 체인 전체 제거 — `is-question` 클래스에 CSS 규칙이 없고 popup도 필드를 안 읽는 완전 데드 기능 (config.isQuestion 메서드 포함 삭제). (2) 즐겨찾기 판정 O(n²)→Set — `favoriteIds`를 favorites 할당 4곳에서 동기 유지. (3) destroy()에서 리스너 해제 — onMessage/onChanged/resize/popstate/witq:urlchange 핸들러를 인스턴스 필드로 보관 후 제거(고아 인스턴스 메모리 누수 방지, chrome.* 해제는 try/catch). (4) `_scanCache` 상한 20 (삽입 순서 기반 LRU 유사 퇴출). (5) manifest `activeTab` 권한 제거 — popup은 tab.id만 사용.
+
+보류(감사에서 발견했으나 의도적 미적용): 툴팁 hide 타이머 클로저(마커 제거 빈도 낮아 미미), updateMarkerElement의 getComputedStyle(즐겨찾기 수 적음), navigateToQuestion 앵커 탐색 로직 중복(내비 핵심 경로라 리팩터 위험 > 이득), 사이트 셀렉터 문자열 중복(취향 수준), getCleanText의 `closest` 검사(제거 시 의미 변화 위험), chatgptElementStrategy 캐시 리셋 스래싱 가능성(실증 없음).
+
 ## 7. 제약 (반드시 지킬 것)
 
 - 외부 npm 의존성 / `package.json` / `node_modules` 금지.
