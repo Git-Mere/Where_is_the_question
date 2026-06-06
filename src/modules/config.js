@@ -79,11 +79,31 @@ window.WITQ.config = {
                     const primary = Array.from(document.querySelectorAll(
                         'div.query-text, .user-query .query-text, .user-query-container .query-text, .query-with-attachments-container .query-text'
                     ));
-                    if (primary.length > 0) return primary;
-
-                    return Array.from(document.querySelectorAll(
-                        '.user-query, .user-query-container, .query-with-attachments-container'
-                    ));
+                    // 첨부 전용 턴: query-text 없이 파일 칩만 있는 컨테이너 (2026-06-05 실기기 DOM 샘플).
+                    // user-query-content와 내부 div가 둘 다 .user-query-container 클래스를 가져
+                    // 중첩 중복은 바깥쪽(조상에 같은 후보가 없는 것)만 채택한다.
+                    const attachmentOnly = Array.from(document.querySelectorAll(
+                        '.user-query-container, .query-with-attachments-container'
+                    )).filter(c =>
+                        !c.querySelector('.query-text') &&
+                        c.querySelector('button.new-file-preview-file, .file-preview-container, .file-attachment-card') &&
+                        !(c.parentElement && c.parentElement.closest('.user-query-container, .query-with-attachments-container'))
+                    );
+                    if (attachmentOnly.length === 0) {
+                        if (primary.length > 0) return primary;
+                        // 폴백: 구 UI
+                        return Array.from(document.querySelectorAll(
+                            '.user-query, .user-query-container, .query-with-attachments-container'
+                        ));
+                    }
+                    const combined = [...primary, ...attachmentOnly];
+                    combined.sort((a, b) => {
+                        const pos = a.compareDocumentPosition(b);
+                        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+                        if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+                        return 0;
+                    });
+                    return combined;
                 },
                 getQuestionText: (questionElement) => {
                     const userQuery = questionElement.closest('.user-query') ||

@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let questionsCache = [];
     let favoritesCache = [];
+    let currentConvKey = null;
 
     // --- Storage API Helpers ---
     const getFavorites = () => {
@@ -62,9 +63,13 @@ document.addEventListener('DOMContentLoaded', () => {
         star.textContent = isFavorite ? '★' : '☆';
         star.addEventListener('click', async () => {
             if (isFavorite) {
-                favoritesCache = favoritesCache.filter(fav => fav.id !== item.id);
+                // 즐겨찾기 섹션 항목은 자체 convKey를, 질문 목록 항목은 현재 대화 키로 폴백
+                const targetConvKey = item.convKey || currentConvKey;
+                favoritesCache = favoritesCache.filter(
+                    fav => !(fav.id === item.id && fav.convKey === targetConvKey)
+                );
             } else {
-                favoritesCache.push({ id: item.id, text: item.text, position: item.position });
+                favoritesCache.push({ id: item.id, text: item.text, position: item.position, convKey: currentConvKey });
             }
             await saveFavorites(favoritesCache);
             updatePopupUI();
@@ -80,11 +85,16 @@ document.addEventListener('DOMContentLoaded', () => {
         questionList.innerHTML = '';
         favoritesList.innerHTML = '';
 
-        const hasFavorites = favoritesCache.length > 0;
+        // 현재 페이지(대화) 기준으로 즐겨찾기를 필터링
+        const pageFavorites = currentConvKey
+            ? favoritesCache.filter(fav => fav.convKey === currentConvKey)
+            : [];
+
+        const hasFavorites = pageFavorites.length > 0;
         favoritesSection.style.display = hasFavorites ? 'block' : 'none';
 
         if (hasFavorites) {
-            favoritesCache.forEach(fav => {
+            pageFavorites.forEach(fav => {
                 favoritesList.appendChild(createQuestionListItem(fav, true));
             });
         }
@@ -97,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
             questionList.style.display = 'block';
 
             questionsCache.forEach(question => {
-                const isFavorite = favoritesCache.some(fav => fav.id === question.id);
+                const isFavorite = pageFavorites.some(fav => fav.id === question.id);
                 questionList.appendChild(createQuestionListItem(question, isFavorite));
             });
         }
@@ -107,6 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.type === 'questionList') {
             questionsCache = message.questions;
+            currentConvKey = message.convKey || null;
             updatePopupUI();
         }
     });

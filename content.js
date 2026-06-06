@@ -58,7 +58,7 @@ class MarkerManager {
 
         try {
             this.favorites = await window.WITQ.storage.getFavorites();
-            this.favoriteIds = new Set(this.favorites.map(f => f.id));
+            this.rebuildFavoriteIds();
             this.scheduleUpdate(true, 0);
             this.scheduleWarmupUpdates();
         } catch (e) {}
@@ -95,6 +95,15 @@ class MarkerManager {
 
     // --- Marker Management ---
 
+    // 현재 대화 키에 속하는 즐겨찾기만 Set에 담는다.
+    // convKey 없는 레거시 항목은 어떤 페이지와도 매칭되지 않아 무시된다.
+    rebuildFavoriteIds() {
+        const convKey = window.WITQ.storage.getConversationKey();
+        this.favoriteIds = new Set(
+            this.favorites.filter(f => f.convKey === convKey).map(f => f.id)
+        );
+    }
+
     getQuestions() {
         return this.config.getQuestionElements();
     }
@@ -125,6 +134,16 @@ class MarkerManager {
     // 마커 생성에서 누락되므로 '이미지 첨부' 대체 식별자를 사용한다.
     // 이미지만 있는 질문이 여러 개면 generateQuestionId의 occurrence 접미사가 구분한다.
     getPlainIdentity(question) {
+        // Gemini 첨부 전용 턴: query-text가 없어 innerText가 칩 라벨 노이즈("TXT" 등)뿐이므로
+        // 칩 aria-label(확장자 포함 파일명)을 식별자로 사용 (2026-06-05 실기기 DOM 샘플)
+        if (this.site === 'gemini' &&
+            question.matches?.('.user-query-container, .query-with-attachments-container') &&
+            !question.querySelector('.query-text')) {
+            const chipNames = Array.from(question.querySelectorAll('button.new-file-preview-file'))
+                .map(b => (b.getAttribute('aria-label') || '').trim())
+                .filter(Boolean);
+            if (chipNames.length > 0) return chipNames.join(', ');
+        }
         const plain = (question.innerText || question.textContent || '').trim();
         if (plain) return plain;
         const scope = this.getQuestionWrapper(question) || question;
@@ -199,6 +218,8 @@ class MarkerManager {
                 // 대화 진입 시마다 재스캔 허용: 캐시는 유지(마커 즉시 표시)하되
                 // 스캔 완료 표식을 지워 긴 페이지면 자동 스캔이 다시 돌게 한다.
                 this.scannedKeys.delete(window.WITQ.storage.getConversationKey());
+                // SPA 대화 전환 시 즐겨찾기 집합을 새 대화 키 기준으로 재구성
+                this.rebuildFavoriteIds();
                 this.scheduleWarmupUpdates();
                 this.startObserver();
             }
@@ -979,15 +1000,16 @@ class MarkerManager {
             if (!entry) return;
 
             try {
+                const convKey = window.WITQ.storage.getConversationKey();
                 const currentFavorites = await window.WITQ.storage.getFavorites();
-                const isFavorite = currentFavorites.some(fav => fav.id === id);
+                const isFavorite = currentFavorites.some(fav => fav.id === id && fav.convKey === convKey);
                 const updatedFavorites = isFavorite
-                    ? currentFavorites.filter(fav => fav.id !== id)
-                    : [...currentFavorites, { id, text: entry.text, position: entry.position }];
+                    ? currentFavorites.filter(fav => !(fav.id === id && fav.convKey === convKey))
+                    : [...currentFavorites, { id, text: entry.text, position: entry.position, convKey }];
 
                 chrome.storage.local.set({ favorites: updatedFavorites });
                 this.favorites = updatedFavorites;
-                this.favoriteIds = new Set(this.favorites.map(f => f.id));
+                this.rebuildFavoriteIds();
                 this.scheduleUpdate(true, 60);
             } catch (err) {
                 // 확장 재로드로 컨텍스트가 죽은 고아 인스턴스: 스스로 정리하고 침묵
@@ -1083,7 +1105,7 @@ class MarkerManager {
         this.onStorageChanged = (changes, namespace) => {
             if (namespace === 'local' && changes.favorites) {
                 this.favorites = changes.favorites.newValue || [];
-                this.favoriteIds = new Set(this.favorites.map(f => f.id));
+                this.rebuildFavoriteIds();
                 this.scheduleUpdate(true, 0);
             }
         };

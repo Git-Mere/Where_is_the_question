@@ -43,7 +43,7 @@ window.WITQ.storage = {
     safeSendQuestionList: function(questionsForPopup) {
          if (!chrome.runtime || !chrome.runtime.id || !chrome.runtime.sendMessage) return;
         try {
-            chrome.runtime.sendMessage({ type: 'questionList', questions: questionsForPopup }, () => {
+            chrome.runtime.sendMessage({ type: 'questionList', questions: questionsForPopup, convKey: this.getConversationKey() }, () => {
                 if (chrome.runtime.lastError) {}
             });
         } catch (e) {}
