@@ -4,7 +4,7 @@
         "description": "The name of the extension."
     },
     "extDescription": {
-        "message": "Finding my questions in ChatGPT, Gemini",
+        "message": "Finding my questions in ChatGPT, Gemini, Claude, Grok",
         "description": "The description of the extension."
     },
     "extDefaultTitle": {
@@ -24,7 +24,7 @@
         "description": "First line of the message shown when no questions are found."
     },
     "emptyMessageLine2": {
-        "message": "Ask a question on the ChatGPT or Gemini page, and it will appear here.",
+        "message": "Ask a question on a ChatGPT, Gemini, Claude, or Grok page, and it will appear here.",
         "description": "Second line of the message shown when no questions are found."
     },
     "contentScriptNotAvailable": {
