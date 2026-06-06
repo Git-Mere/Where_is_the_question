@@ -144,6 +144,18 @@ class MarkerManager {
                 .filter(Boolean);
             if (chipNames.length > 0) return chipNames.join(', ');
         }
+        // Claude 첨부 전용 턴: 래퍼 innerText에 타임스탬프("Jun 4")와 아이콘 폰트 글리프가 섞이므로
+        // innerText 대신 썸네일 파일명을 식별자로 사용 (마커 툴팁과 달리 팝업은 fast text를 그대로 노출)
+        if (this.site === 'claude' &&
+            question.matches?.('[data-test-render-count]') &&
+            !question.querySelector('[data-testid="user-message"]')) {
+            const thumbNames = Array.from(question.querySelectorAll('[data-testid="file-thumbnail"] h3'))
+                .map(h => (h.textContent || '').trim())
+                .filter(Boolean);
+            if (thumbNames.length > 0) return thumbNames.join(', ');
+            // 이미지 썸네일은 data-testid가 파일명이라 h3가 없을 수 있음 → 공통 클래스/이미지로 판정
+            if (question.querySelector('[class*="group/thumbnail"], img')) return '이미지 첨부';
+        }
         const plain = (question.innerText || question.textContent || '').trim();
         if (plain) return plain;
         const scope = this.getQuestionWrapper(question) || question;
