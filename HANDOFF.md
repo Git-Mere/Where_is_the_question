@@ -8,9 +8,9 @@
 
 ## 1. 프로젝트 개요
 
-- **크롬 확장(Manifest V3)**. ChatGPT/Gemini 대화 페이지에서 **사용자 질문 위치를 스크롤바 옆 파란 마커**로 표시.
-- 핵심 UX: 마커 클릭 → 해당 질문으로 이동 / 호버 → 미리보기 툴팁 / 우클릭 → 즐겨찾기(노란 마커 + 질문 옆 별표) / 팝업 → 질문·즐겨찾기 목록.
-- 현재 버전: `manifest.json` **1.5**. 웹스토어 업로드 zip은 `dist/` 경로 사용 (마지막 업로드는 v1.3).
+- **크롬 확장(Manifest V3)**. ChatGPT/Gemini/Claude/Grok 대화 페이지에서 **사용자 질문 위치를 스크롤바 옆 파란 마커**로 표시.
+- 핵심 UX: 마커 클릭 → 해당 질문으로 이동 / 호버 → 미리보기 툴팁 / 우클릭 → 즐겨찾기(노란 마커 + 질문 옆 별표) / 팝업 → 질문·즐겨찾기 목록 (현재 대화 것만 표시).
+- 현재 버전: `manifest.json` **1.6** — **2026-06-05 웹스토어 업로드 완료, 심사 대기 중**. 업로드 zip은 루트의 `where-is-the-question-1.6.zip`(gitignore, 배포 파일 15개만: manifest/content/popup/src/modules/로케일/아이콘 3종). 1.5 대비 호스트 권한 추가(claude.ai, grok.com)로 심사 지연·기존 사용자 재승인 프롬프트 가능성 있음.
 - 콘텐츠 스크립트 로드 순서: `src/modules/text.js` → `config.js` → `dom.js` → `storage.js` → `content.js` (`run_at: document_idle`).
 
 ## 2. 팀 운영 (프로젝트 CLAUDE.md 기준)
@@ -30,7 +30,7 @@
 
 - `content.js` — `MarkerManager` 클래스 (~900줄). 마커 생명주기(`this.markers`: id → {marker, element, position, text, isQuestion}), 스캔 루프, 클릭 이동, SPA URL 변경 처리, 워밍업 업데이트(`[180,900,2000,4000]ms`), MutationObserver(+body 폴백, 재시도 5회 제한), 디바운스/RAF 스케줄링, 즐겨찾기 동기화, 멀티 인스턴스 정리(`witq:teardown` 이벤트).
 - `src/modules/text.js` — 공유 순수 유틸 (UMD): `escapeHtml`, `normalizeFileName`, `stripYouSaid`, `normalizePlainText`, `hashString`. **테스트 대상은 이 순수 유틸만.**
-- `src/modules/config.js` — 사이트별 질문 셀렉터/파서 (ChatGPT/Gemini 분리), 첨부파일명 추출, 툴팁 텍스트 구성.
+- `src/modules/config.js` — 사이트별 질문 셀렉터/파서 (ChatGPT/Gemini/Claude/Grok), 첨부파일명 추출, 툴팁 텍스트 구성.
 - `src/modules/dom.js` — 스크롤 컨테이너 감지(질문 포함 조상 우선 + 검증된 셀렉터 폴백, 500ms 캐시), 위치 측정, `scrollToQuestionPosition(rawPosition, container, behavior)`.
 - `src/modules/storage.js` — 대화별 스캔 캐시(메모리 전용, `getConversationKey()` = pathname, 값 형태 `{questions, scanHeight}`), 즐겨찾기(chrome.storage.local), 팝업 메시징.
 - 질문 ID: 콘텐츠 해시 기반 `generateQuestionId` (같은 텍스트 중복 시 출현 순번 접미사).
@@ -91,7 +91,7 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 | # | 사이트 | 증상 | 추정 원인 / 접근 |
 |---|---|---|---|
-| 1 | Gemini | ~~png만 회색 박스에 뜨고, 그 외 파일(pdf 등)은 **본문 박스에 섞여 나옴**~~ **수정 완료 (2026-06-04, 실기기 확인 대기)** | 사용자 제공 DOM 샘플로 확정: 현행 파일 칩은 `.user-query-container > .file-preview-container > ... > button.new-file-preview-file`(aria-label=확장자 포함 전체 파일명, 내부에 `.extension-label`/`.filename-label`). 칩 버튼을 파일명 셀렉터에 추가, `.file-preview-container`를 본문 제외 목록에 추가, `img`는 `:not(.luminous-file-icon)`으로 한정(파일 종류 아이콘 alt "DOCX icon" 오인 방지) |
+| 1 | Gemini | ~~png만 회색 박스에 뜨고, 그 외 파일(pdf 등)은 **본문 박스에 섞여 나옴**~~ **수정 완료 (2026-06-04, 실기기 확인 2026-06-05 체크리스트 1-5 통과)** | 사용자 제공 DOM 샘플로 확정: 현행 파일 칩은 `.user-query-container > .file-preview-container > ... > button.new-file-preview-file`(aria-label=확장자 포함 전체 파일명, 내부에 `.extension-label`/`.filename-label`). 칩 버튼을 파일명 셀렉터에 추가, `.file-preview-container`를 본문 제외 목록에 추가, `img`는 `:not(.luminous-file-icon)`으로 한정(파일 종류 아이콘 alt "DOCX icon" 오인 방지) |
 | 2 | Claude | ~~회색 박스 전혀 안 뜸 + **첨부만 있는 질문은 마커 자체가 안 생김**~~ **완료 (2026-06-04, 실기기 확인)** | DOM 샘플로 확정: 썸네일(`[data-testid="file-thumbnail"]`, 파일명은 내부 `h3`)이 버블 밖 턴 래퍼에 있음. (1) getQuestionText 컨테이너를 `[data-test-render-count]`로 확장, 본문 제외에 `.sr-only`(You said 중복)/썸네일/`[role="group"]`(타임스탬프) 추가 → 회색 박스 해결(실기기 확인). (2) 첨부 전용 질문(라이브 검증 2026-06-04 최종): 정상적으로 턴 래퍼 안에 렌더되지만 **이미지 썸네일은 `data-testid`가 파일명**이라 `file-thumbnail` 필터에 안 걸렸던 것 → 공통 클래스 `[class*="group/thumbnail"]`로 판정 확장. 추가 발견: **`[data-testid="chat-stale-nav-inert"]`(inert+aria-hidden) 스테일 프레임**에 이전 화면 캐시(파일 그리드 등)가 남아 가짜 질문으로 잡혔음 → claude 질문 수집에서 `closest('[inert], [aria-hidden="true"]')` 제외 필터 적용. 중간에 시도했던 고아 그리드 수집은 스테일 패널 오인이라 제거. `getPlainIdentity` 썸네일 h3 폴백(content.js)은 안전망으로 유지. 마지막 잔여 버그(첨부 전용 턴 본문에 타임스탬프 `7:28 PM` + Anthropicons 글리프 샘)는 본문 제외에 `button`/`.text-text-500`/`[class*="group/thumbnail"]` 추가로 해결 — 사용자 버블엔 button이 없어 안전. 전 케이스 실기기 확인 완료 |
 | 3 | Grok | ~~png은 회색 박스 자체가 안 생기고, pdf 등은 **본문 박스에 섞여 나옴**~~ **완료 (2026-06-05, 실기기 확인)** | DOM 샘플(2026-06-04)로 확정: Grok DOM 변경으로 사용자 버블에도 `.response-content-markdown`이 생겨 구 사용자/AI 판별이 무효 → `div[id^="response-"] [data-testid="user-message"]` 우선, 구 로직은 폴백 유지. 첨부 칩(`group/chip`)이 버블 밖 행 직속이라 getQuestionText 컨테이너를 행 전체로 확장, 파일명은 `[class*="group/chip"] span.truncate`(칩 button 자체에 truncate가 있어 span 한정), 본문 제외에 칩 전체/`.action-buttons`/`button` 추가. png 칩은 `img[alt=""]`뿐(파일명 없음)이라 extractQuestionData의 빈 raw skip을 "빈 IMG는 `이미지` 집계"로 보완(공유 경로지만 타 사이트 첨부 이미지는 alt/파일명 보유, Reviewer 저위험 판정). 참고: Grok은 첨부 전용 질문도 "다음 내용을 참조하세요:" 본문이 자동 생성돼 마커 누락 없음 |
 | 4 | ~~Perplexity~~ | **사이트 자체를 지원 제외 (2026-06-04 사용자 결정)** | 별이 질문 박스를 가리는 문제(클램프 제거로도 미해결)가 계기. 코드/manifest에서 제거 완료 |
@@ -126,12 +126,21 @@ ChatGPT는 화면 밖 메시지를 DOM에서 언마운트(가상화, 한 번에 
 
 1. 이 문서 Read → `git log --oneline -5`로 상태 확인.
 2. Coder/Reviewer 서브에이전트 스폰 (프로젝트 CLAUDE.md의 시스템 프롬프트 사용).
-3. **계획된 작업은 전부 완료된 상태** (2026-06-05 기준): 6장 업데이트 목록, LOW 항목, 전체 코드 감사 정리까지 끝. 재진입 클릭 버그도 해결 확인.
-4. **다음 세션 예정 흐름**: 사용자가 `CHECKLIST.md`(로컬 전용, gitignore — 사이트별 기능 12항목/시나리오 8항목/팝업 6항목/안정성 6항목 표)로 전 기능을 실기기 검증하고 결과를 피드백 → ❌ 항목을 받아 수정 작업. 체크리스트 파일이 없으면 사용자에게 요청(로컬에만 존재).
+3. **v1.6 스토어 업로드 완료, 심사 대기 상태** (2026-06-05): 기능 작업·체크리스트 검증 전부 완료. 다음 세션은 심사 결과 확인(반려 시 대응) 또는 사용자 신규 요청부터.
+4. 스토어 등록 정보(설명문, single purpose, 권한 justification, 릴리즈 노트)는 대시보드에서 사용자가 직접 관리 — 초안은 2026-06-05 2차 세션에서 전달 완료. 호스트 권한 justification에 claude.ai/grok.com 추가분 반영됨.
 5. 각 수정마다: 디스크 검증(node --check + 테스트) → Reviewer → **즉시 main 커밋+푸시** → 사용자 실기기 테스트.
 
-### 2026-06-05 세션 요약
+### 2026-06-05 세션 요약 (1차)
 - Grok 첨부 표시 수정(신규 DOM 사용자 판별 + 칩 파일명/이미지 집계) — 실기기 확인 완료.
 - LOW 2건: 즐겨찾기 별 배치 읽기/쓰기 일괄화(스래싱 해소), `__witqMM` witqDebug 게이팅.
 - 전체 코드 감사 정리 5건 (위 6장 "전체 코드 감사 및 정리" 참고) + 보류 목록 기록.
 - `CHECKLIST.md`(로컬)/`.gitignore` 추가. 마커 동작 변경 사항은 즐겨찾기 별 배치 경로뿐이라, 체크리스트 1-9~1-12 항목이 핵심 회귀 확인 지점.
+
+### 2026-06-05 세션 요약 (2차) — 체크리스트 검증 → 버그 3건 수정 → v1.6 스토어 업로드
+- **체크리스트 전 항목 실기기 검증 통과** (1.5 기준, 버그 3건 발견 후 수정·재확인 완료).
+- **즐겨찾기 대화별 스코핑** (`2cf8b01`): 저장 형식에 `convKey`(pathname) 추가. 팝업은 `safeSendQuestionList`가 보내는 convKey로 현재 대화 것만 표시, 마커 노란색 판정(`favoriteIds`)도 `rebuildFavoriteIds()`로 대화별 재구성(초기화/토글/스토리지 변경/SPA URL 변경 4곳). **convKey 없는 레거시 즐겨찾기는 의도적으로 무시(마이그레이션 없음, 재등록 필요)** — 사용자 결정.
+- **Gemini 첨부 전용 질문 마커 누락 수정** (`2cf8b01`, 실기기 DOM 샘플 확보): 첨부 전용 턴에는 `.query-text`가 아예 없음. `user-query-content`와 내부 div가 **둘 다** `.user-query-container` 클래스를 가져 최외곽만 채택(중첩 듀프 방지). 식별자는 칩 `button.new-file-preview-file`의 aria-label(확장자 포함 파일명). 실기기 확인 완료 — 6장 표 1번(Gemini)도 이로써 종결.
+- **Claude 첨부 전용 질문 팝업 노이즈 수정** (`e6675c0`): 팝업은 fast text(`getPlainIdentity`)를 그대로 쓰는데 턴 래퍼 innerText에 타임스탬프("Jun 4")+아이콘 글리프가 섞임 → `getPlainIdentity`에 Claude 분기 추가(썸네일 h3 파일명, 없으면 '이미지 첨부'). 게이트: `[data-test-render-count]` 매치 + `[data-testid="user-message"]` 부재 — config.js 수집 필터와 동일 집합. 실기기 확인 완료.
+- **문서/문구 4사이트화** (`ab99119`): 로케일 ko/en(extDescription, emptyMessageLine2), README 사용법, PRIVACY_POLICY 도메인 명시. README 개발 과정 섹션은 제거(`7693f06`).
+- **v1.6 릴리즈** : manifest 1.6, 스토어 zip 패키징 후 사용자가 업로드 완료. 스토어 설명문(한/영)·single purpose·권한 justification·릴리즈 노트 초안 전달(대화 내). 참고: 크롬 웹스토어엔 릴리즈 노트 전용 필드가 없음(설명문 하단 또는 GitHub Releases 사용).
+- 알려진 사용자 영향: 1.5에서 등록한 즐겨찾기는 1.6에서 보이지 않음(형식 변경). Claude 첨부 전용 턴의 질문 ID도 식별자 변경으로 바뀜.
