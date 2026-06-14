@@ -158,7 +158,7 @@ class MarkerManager {
                 .filter(Boolean);
             if (thumbNames.length > 0) return thumbNames.join(', ');
             // 이미지 썸네일은 data-testid가 파일명이라 h3가 없을 수 있음 → 공통 클래스/이미지로 판정
-            if (question.querySelector('[class*="group/thumbnail"], img')) return '이미지 첨부';
+            if (question.querySelector('[class*="group/thumbnail"], img')) return chrome.i18n.getMessage('imageAttachment');
         }
         const plain = (question.innerText || question.textContent || '').trim();
         if (plain) return plain;
@@ -169,7 +169,7 @@ class MarkerManager {
             .map(h => (h.textContent || '').trim())
             .filter(Boolean);
         if (thumbNames.length > 0) return thumbNames.join(', ');
-        if (scope.querySelector('img')) return '이미지 첨부';
+        if (scope.querySelector('img')) return chrome.i18n.getMessage('imageAttachment');
         return '';
     }
 
@@ -567,7 +567,7 @@ class MarkerManager {
         if (!el) {
             el = document.createElement('div');
             el.id = 'witq-scan-indicator';
-            el.textContent = '스캔 중...';
+            el.textContent = chrome.i18n.getMessage('scanning');
             document.body.appendChild(el);
         }
     }
@@ -994,8 +994,10 @@ class MarkerManager {
             }
 
             const html = this.formatTooltipHtml(displayText);
-            // 첨부 줄("*... 첨부")은 회색 박스로 분리, 나머지는 본문 박스에
-            const attachMatch = html.match(/^\*((?:(?!<br>).)*첨부)(?:<br>|$)/);
+            // 첨부 줄("*... 첨부" / "*... attached")은 회색 박스로 분리, 나머지는 본문 박스에.
+            // 접미사가 로케일별(attachmentSuffix)이라 정규식을 동적으로 구성한다.
+            const suffix = chrome.i18n.getMessage('attachmentSuffix').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const attachMatch = html.match(new RegExp('^\\*((?:(?!<br>).)*' + suffix + ')(?:<br>|$)'));
             if (attachMatch) {
                 attachmentBox.innerHTML = attachMatch[1];
                 attachmentBox.style.display = '';

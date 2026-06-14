@@ -38,5 +38,21 @@
     "questionsHeader": {
         "message": "전체 질문",
         "description": "팝업의 전체 질문 목록 섹션 헤더입니다."
+    },
+    "scanning": {
+        "message": "스캔 중...",
+        "description": "긴 대화를 스캔하는 동안 페이지에 표시되는 배지입니다."
+    },
+    "imageAttachment": {
+        "message": "이미지 첨부",
+        "description": "텍스트 없이 이미지 첨부만 있는 질문에 표시되는 식별자입니다."
+    },
+    "imageLabel": {
+        "message": "이미지",
+        "description": "업로드한 이미지에 대해 첨부 목록에 사용되는 라벨입니다."
+    },
+    "attachmentSuffix": {
+        "message": "첨부",
+        "description": "첨부 파일명 뒤에 붙는 단어입니다. 예: '보고서.pdf 첨부'."
     }
 }

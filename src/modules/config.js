@@ -295,15 +295,16 @@ window.WITQ.config = {
         // 첨부 파일명 목록 수집 — 이미지 업로드는 '이미지' 레이블, 나머지는 실제 파일명
         const attachmentLabels = [];
         if (imageUploadCount > 0) {
-            attachmentLabels.push('이미지');
+            attachmentLabels.push(chrome.i18n.getMessage('imageLabel'));
         }
         fileNames.forEach(name => attachmentLabels.push(name));
 
         const outputLines = [];
         if (attachmentLabels.length > 0) {
-            // 예: "*기숙사 거주 사실 확인서.pdf 첨부" 또는 "*이미지, 보고서.pdf 첨부"
+            // 예: "*기숙사 거주 사실 확인서.pdf 첨부" 또는 "*Image, report.pdf attached" (로케일별 접미사)
             const label = attachmentLabels.join(', ');
-            outputLines.push(window.WITQ.text.escapeHtml(`*${label} 첨부`));
+            const suffix = chrome.i18n.getMessage('attachmentSuffix');
+            outputLines.push(window.WITQ.text.escapeHtml(`*${label} ${suffix}`));
         }
         if (mainText) outputLines.push(window.WITQ.text.escapeHtml(mainText));
         return outputLines.join('<br>');

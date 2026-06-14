@@ -38,5 +38,21 @@
     "questionsHeader": {
         "message": "All Questions",
         "description": "Header for the full question list section in the popup."
+    },
+    "scanning": {
+        "message": "Scanning...",
+        "description": "Badge shown in the page while scanning a long conversation."
+    },
+    "imageAttachment": {
+        "message": "Image attachment",
+        "description": "Identifier shown for a question that has only an image attachment and no text."
+    },
+    "imageLabel": {
+        "message": "Image",
+        "description": "Label used in the attachment list for an uploaded image."
+    },
+    "attachmentSuffix": {
+        "message": "attached",
+        "description": "Word appended after attachment file names, e.g. 'report.pdf attached'."
     }
 }
