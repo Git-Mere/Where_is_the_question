@@ -26,6 +26,10 @@ class MarkerManager {
         // 스캔 상태 추적
         this.isScanning = false;
         this.scannedKeys = new Set(); // 이미 스캔 완료된 대화 키
+        // 짧을 때부터 지켜본 대화 키: 점진 캐시로 질문을 이미 모았으므로 강제 스캔(맨 위 스크롤) 생략 대상
+        this.grownUnderWatch = new Set();
+        // 현재 대화 진입 시각: 초기 로딩 중 높이 램프업을 "진입 시 이미 긴 대화"로 오판하지 않기 위한 게이트
+        this.currentConvMountTime = Date.now();
 
         // 리사이즈 재측정용: 마지막 뷰포트 크기 + 디바운스 타이머
         this.lastViewport = { w: window.innerWidth, h: window.innerHeight };
@@ -226,6 +230,9 @@ class MarkerManager {
             // isScanning 가드보다 먼저 처리한다.
             if (this.lastUrl !== location.href) {
                 this.lastUrl = location.href;
+                // 새 대화 진입: 로딩 램프업 게이트를 위해 진입 시각 갱신.
+                // grownUnderWatch는 비우지 않는다 — 한 세션에서 길러온 대화는 재진입해도 스캔 생략 유지.
+                this.currentConvMountTime = Date.now();
                 this.resetMarkers();
                 // 대화 진입 시마다 재스캔 허용: 캐시는 유지(마커 즉시 표시)하되
                 // 스캔 완료 표식을 지워 긴 페이지면 자동 스캔이 다시 돌게 한다.
@@ -289,6 +296,28 @@ class MarkerManager {
                 } else {
                     unionById.set(id, liveEntry);
                 }
+            }
+
+            // 점진 캐시 누적: 현재 렌더된 질문을 대화 캐시에 합쳐, 가상화로 unmount돼도
+            // 마커/네비게이션 캐시가 유지되게 한다. (강제 스캔 없이 옛 질문 보존)
+            // 좌표계 불일치 시엔 union과 동일하게 기존 캐시 position을 보존하고 텍스트만 갱신한다.
+            if (liveById.size > 0) {
+                const accumById = new Map(cachedById); // 기존 캐시 (position in-place 갱신 반영됨)
+                for (const [id, liveEntry] of liveById) {
+                    const existing = accumById.get(id);
+                    if (existing && !allowCacheOverwrite) {
+                        accumById.set(id, { id, text: liveEntry.text, position: existing.position });
+                    } else {
+                        accumById.set(id, { id, text: liveEntry.text, position: liveEntry.position });
+                    }
+                }
+                const accumList = Array.from(accumById.values())
+                    .map(e => ({ id: e.id, text: e.text, position: e.position }))
+                    .sort((a, b) => a.position - b.position);
+                window.WITQ.storage.setScanCache(convKey, {
+                    questions: accumList,
+                    scanHeight: Math.max(scanHeight, totalHeight)
+                });
             }
 
             if (this.debug) console.log('[WITQ] update', { live: liveDomQuestions.length, cached: cached.length, union: unionById.size, container: container === window ? 'window' : 'element', totalHeight, scanHeight, effHeight });
@@ -382,10 +411,18 @@ class MarkerManager {
             // 팝업에 전체 목록 전송 (캐시 포함)
             window.WITQ.storage.safeSendQuestionList(questionsForPopup);
 
-            // 긴 페이지에서 처음 마커가 그려진 뒤, 해당 대화를 아직 스캔하지 않았다면 자동 스캔
+            // 자동 스캔: 진입 시 이미 길었던 대화만 대상. 짧을 때부터 써온 세션은
+            // 점진 캐시로 질문을 이미 모았으므로 강제 스캔(맨 위로 스크롤)을 생략한다.
             const viewportHeight = (container === window) ? window.innerHeight : container.clientHeight;
             const isLongPage = totalHeight > viewportHeight * 3;
-            if (isLongPage && !this.scannedKeys.has(convKey) && !this.isScanning) {
+            // 초기 로딩 램프업(높이가 점점 커지는 구간)을 진입-긴-대화로 오판하지 않도록,
+            // 진입 후 일정 시간이 지나서도 여전히 짧을 때만 "지켜본 대화"로 표시한다.
+            const convSettled = Date.now() - this.currentConvMountTime > 5000;
+            if (!isLongPage && convSettled) {
+                this.grownUnderWatch.add(convKey);
+            }
+            if (isLongPage && !this.scannedKeys.has(convKey) && !this.isScanning &&
+                !this.grownUnderWatch.has(convKey)) {
                 this.scanAllQuestions();
             }
         } catch (error) {
