@@ -54,5 +54,9 @@
     "attachmentSuffix": {
         "message": "attached",
         "description": "Word appended after attachment file names, e.g. 'report.pdf attached'."
+    },
+    "buyMeCoffee": {
+        "message": "☕ Buy me a coffee",
+        "description": "Footer link inviting users to support the developer."
     }
 }

@@ -2,6 +2,7 @@ body {
     width: 350px;
     max-height: 500px;
     margin: 0;
+    padding-bottom: 46px; /* reserve space for the fixed footer link */
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     background-color: #f0f2f5;
     color: #1c1e21;
@@ -96,4 +97,26 @@ h1 {
 .empty-message p {
     margin: 5px 0;
     font-size: 14px;
+}
+
+.footer-link {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: block;
+    text-align: center;
+    padding: 10px 15px;
+    border-top: 1px solid #ddd;
+    background-color: #f0f2f5;
+    color: #65676b;
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.footer-link:hover {
+    background-color: #e9ebee;
+    color: #00529B;
 }

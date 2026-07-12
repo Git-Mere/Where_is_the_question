@@ -54,5 +54,9 @@
     "attachmentSuffix": {
         "message": "첨부",
         "description": "첨부 파일명 뒤에 붙는 단어입니다. 예: '보고서.pdf 첨부'."
+    },
+    "buyMeCoffee": {
+        "message": "☕ 커피 한 잔 사주기",
+        "description": "개발자를 후원하도록 안내하는 푸터 링크입니다."
     }
 }
