@@ -1,1267 +1,670 @@
-class MarkerManager {
-    constructor() {
-        this.debounceTimeout = null;
-        this.updateRafId = null;
-        this.pendingForceUpdate = false;
-        this.isUpdating = false;
-        this.pendingUpdateAfterRun = false;
-        this.minUpdateInterval = 180;
-        this.lastUpdateTime = 0;
-        this.favorites = [];
-        // 마커 갱신 루프의 O(1) 즐겨찾기 판정용
-        this.favoriteIds = new Set();
-        this.site = window.WITQ.config.site;
-        this.config = window.WITQ.config.config;
-        this.scrollbarContainer = null;
-        this.observer = null;
-        this.observerTarget = null;
-        this.observerRetryTimer = null;
-        this.observerRetryCount = 0;
-        // ID 기반 마커 맵: id -> { marker, element|null, position, text }
-        this.markers = new Map();
-        this.questionDataCache = new WeakMap(); // DOM 요소 -> 파싱된 데이터 캐시
-        this.lastUrl = location.href;
-        this.warmupTimers = [];
+// Where is the Question? 콘텐츠 스크립트
+//
+// 흐름
+//   1. 대화가 바뀌면(주소 변경) 상태를 비우고, 사이트가 지원하면 대화 데이터에서 질문 전체 목록을 받는다.
+//   2. 화면(DOM)에 렌더된 질문은 실제 위치를 잰다. 가상화로 사라진 질문은 마지막 측정값을 기억한다.
+//   3. 실측 위치 + 대화 데이터의 분량 비율로 모든 질문의 마커 위치를 계산해 스크롤바 옆에 그린다.
+//   4. 마커 클릭 시 질문이 화면에 있으면 바로, 없으면 어림 위치로 점프 → 렌더되면 정확히 맞춘다.
+(function() {
+    const W = window.WITQ;
+    const site = W && W.sites && W.sites.current();
+    if (!site) return;
 
-        // 스캔 상태 추적
-        this.isScanning = false;
-        this.scannedKeys = new Set(); // 이미 스캔 완료된 대화 키
-        // 짧을 때부터 지켜본 대화 키: 점진 캐시로 질문을 이미 모았으므로 강제 스캔(맨 위 스크롤) 생략 대상
-        this.grownUnderWatch = new Set();
-        // 현재 대화 진입 시각: 초기 로딩 중 높이 램프업을 "진입 시 이미 긴 대화"로 오판하지 않기 위한 게이트
-        this.currentConvMountTime = Date.now();
+    const MSG = (key) => {
+        try { return chrome.i18n.getMessage(key) || ''; } catch (e) { return ''; }
+    };
 
-        // 리사이즈 재측정용: 마지막 뷰포트 크기 + 디바운스 타이머
-        this.lastViewport = { w: window.innerWidth, h: window.innerHeight };
-        this.resizeDebounceTimer = null;
+    const unescapeHtml = (s) => String(s || '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'").replace(/&amp;/g, '&');
 
-        // 디버그 로그 토글 (사용자 재현 시 수동으로 true)
-        this.debug = false;
+    const normalizeForMatch = (s) =>
+        W.text.stripYouSaid(unescapeHtml(s)).replace(/\s+/g, ' ').trim().toLowerCase();
 
-        // 내비게이션 연타 가드: 새 클릭이 이전 이동을 취소하기 위한 토큰
-        this.navToken = 0;
+    const OWN_CLASS_RE = /^witq-/;
+    const isOwnNode = (node) => node.nodeType === 1 &&
+        (OWN_CLASS_RE.test(node.id || '') || Array.from(node.classList || []).some(c => OWN_CLASS_RE.test(c)));
 
-        // 고아 인스턴스 방지: 새 스크립트가 teardown 이벤트를 쏘면 이전 인스턴스 정리.
-        // 이 인스턴스도 이후 teardown을 수신하면 스스로 정리한다.
-        this.destroyed = false;
-        window.dispatchEvent(new Event('witq:teardown'));
-        window.addEventListener('witq:teardown', () => this.destroy(), { once: true });
+    class Controller {
+        constructor() {
+            this.destroyed = false;
+            this.debug = false;
+            this.items = new Map();       // id -> { id, pos, live, turnEl, bubbleEl, domText, domAttachments, domImages }
+            this.apiList = null;          // 대화 데이터에서 받은 질문 목록 (없으면 null)
+            this.apiState = 'idle';       // idle | loading | done
+            this.apiToken = 0;
+            this.apiRefetchTimer = null;
+            this.apiRefetchedFor = '';
+            this.convKey = null;
+            this.sawFirstQuestion = false;
+            this.lastHeight = 0;
+            this.container = null;
+            this.layout = { ordered: [], fractions: [], loadedStart: 0, height: 1 };
+            this.markers = new Map();     // id -> marker element
+            this.favorites = [];
+            this.favoriteIds = new Set();
+            this.migratedConv = null;
+            this.navToken = 0;
+            this.refreshTimer = null;
+            this.popupSignature = '';
+            this.tooltipHideTimer = null;
 
-        this.initialize();
-    }
+            // 이전 인스턴스(확장 재로드/구버전) 정리. 신호를 먼저 보내고 나서 내 리스너를 단다.
+            window.dispatchEvent(new Event('witq:teardown'));
+            this.onTeardown = () => this.destroy();
+            window.addEventListener('witq:teardown', this.onTeardown);
+            document.querySelectorAll('#question-scrollbar-container, #witq-scan-indicator, .witq-favorite-star')
+                .forEach(el => el.remove());
 
-    async initialize() {
-        // 디버그 플래그 영속화: 자동 스캔/첫 갱신 전에 먼저 반영
-        try {
-            const r = await chrome.storage.local.get('witqDebug');
-            if (r && r.witqDebug) this.debug = true;
-        } catch (e) {}
+            this.buildUi();
+            this.init();
+        }
 
-        // 디버그 모드일 때만 DevTools용 핸들 노출 (격리 월드 콘솔에서 __witqMM로 접근)
-        if (this.debug) window.__witqMM = this;
+        log(...args) {
+            if (this.debug) console.log('[WITQ]', ...args);
+        }
 
-        try {
-            this.favorites = await window.WITQ.storage.getFavorites();
+        async init() {
+            try {
+                const r = await chrome.storage.local.get('witqDebug');
+                this.debug = !!(r && r.witqDebug);
+                if (this.debug) window.__witq = this;
+            } catch (e) {}
+            try {
+                this.favorites = await W.storage.getFavorites();
+            } catch (e) {
+                this.favorites = [];
+            }
+            if (this.destroyed) return;
+            this.setupListeners();
+            this.checkConversation();
+        }
+
+        // ---------------- 대화 전환 ----------------
+
+        checkConversation() {
+            if (this.destroyed) return;
+            const key = W.storage.conversationKey();
+            if (key === this.convKey) return;
+            this.log('conversation', key);
+            this.convKey = key;
+            this.resetState();
+            this.fetchApi();
+            this.scheduleRefresh(0);
+        }
+
+        resetState() {
+            this.navToken++;
+            this.items.clear();
+            this.apiList = null;
+            this.apiState = 'idle';
+            this.apiToken++;
+            clearTimeout(this.apiRefetchTimer);
+            this.apiRefetchTimer = null;
+            this.apiRefetchedFor = '';
+            this.sawFirstQuestion = false;
+            this.lastHeight = 0;
+            this.layout = { ordered: [], fractions: [], loadedStart: 0, height: 1 };
+            this.markers.forEach(m => m.remove());
+            this.markers.clear();
+            this.hideTooltip(true);
+            document.querySelectorAll('.witq-star').forEach(el => el.remove());
             this.rebuildFavoriteIds();
-            this.scheduleUpdate(true, 0);
-            this.scheduleWarmupUpdates();
-        } catch (e) {}
-
-        this.setupEventListeners();
-        this.startObserver();
-    }
-
-    destroy() {
-        this.destroyed = true;
-        if (this.observer) this.observer.disconnect();
-        clearTimeout(this.debounceTimeout);
-        clearTimeout(this.observerRetryTimer);
-        clearTimeout(this.resizeDebounceTimer);
-        this.cancelWarmupUpdates();
-        if (this.updateRafId !== null) {
-            cancelAnimationFrame(this.updateRafId);
-            this.updateRafId = null;
+            this.popupSignature = '';
+            this.bar.style.display = 'none';
         }
-        if (window.__witqMM === this) delete window.__witqMM;
-        // 등록된 이벤트 리스너 해제 (고아 인스턴스의 메모리 누수 방지)
-        if (this.onRuntimeMessage) {
-            try { chrome.runtime.onMessage.removeListener(this.onRuntimeMessage); } catch (e) {}
-        }
-        if (this.onStorageChanged) {
-            try { chrome.storage.onChanged.removeListener(this.onStorageChanged); } catch (e) {}
-        }
-        if (this.onWindowResize) window.removeEventListener('resize', this.onWindowResize);
-        if (this.onNavChange) {
-            window.removeEventListener('popstate', this.onNavChange);
-            window.removeEventListener('witq:urlchange', this.onNavChange);
-        }
-    }
 
-    // --- Marker Management ---
-
-    // 현재 대화 키에 속하는 즐겨찾기만 Set에 담는다.
-    // convKey 없는 레거시 항목은 어떤 페이지와도 매칭되지 않아 무시된다.
-    rebuildFavoriteIds() {
-        const convKey = window.WITQ.storage.getConversationKey();
-        this.favoriteIds = new Set(
-            this.favorites.filter(f => f.convKey === convKey).map(f => f.id)
-        );
-    }
-
-    getQuestions() {
-        return this.config.getQuestionElements();
-    }
-
-    getQuestionWrapper(questionEl) {
-        if (!questionEl) return null;
-        if (this.site === 'gemini') {
-            return questionEl.closest('.user-query-container') ||
-                   questionEl.closest('.query-with-attachments-container') ||
-                   questionEl.closest('.user-query') ||
-                   questionEl;
+        async fetchApi() {
+            const token = ++this.apiToken;
+            this.apiState = 'loading';
+            let list = null;
+            try {
+                list = await site.fetchQuestions();
+            } catch (e) {
+                this.log('fetch failed', e);
+            }
+            if (this.destroyed || token !== this.apiToken) return;
+            this.apiList = Array.isArray(list) ? list : null;
+            this.apiState = 'done';
+            this.log('api list', this.apiList ? this.apiList.length : null);
+            this.scheduleRefresh(0);
         }
-        if (this.site === 'chatgpt') {
-            return questionEl.closest('[data-testid^="conversation-turn"]') || questionEl;
-        }
-        if (this.site === 'claude') {
-            // 각 메시지를 감싸는 렌더 래퍼 (없으면 질문 요소 자체)
-            return questionEl.closest('[data-test-render-count]') || questionEl;
-        }
-        if (this.site === 'grok') {
-            return questionEl.closest('div[id^="response-"]') || questionEl;
-        }
-        return questionEl;
-    }
 
-    // 질문 요소의 식별용 플레인 텍스트.
-    // 텍스트가 전혀 없는 질문(이미지만 첨부)은 innerText가 빈 문자열이라
-    // 마커 생성에서 누락되므로 '이미지 첨부' 대체 식별자를 사용한다.
-    // 이미지만 있는 질문이 여러 개면 generateQuestionId의 occurrence 접미사가 구분한다.
-    getPlainIdentity(question) {
-        // Gemini 첨부 전용 턴: query-text가 없어 innerText가 칩 라벨 노이즈("TXT" 등)뿐이므로
-        // 칩 aria-label(확장자 포함 파일명)을 식별자로 사용 (2026-06-05 실기기 DOM 샘플)
-        if (this.site === 'gemini' &&
-            question.matches?.('.user-query-container, .query-with-attachments-container') &&
-            !question.querySelector('.query-text')) {
-            const chipNames = Array.from(question.querySelectorAll('button.new-file-preview-file'))
-                .map(b => (b.getAttribute('aria-label') || '').trim())
-                .filter(Boolean);
-            if (chipNames.length > 0) return chipNames.join(', ');
+        // 화면에 대화 데이터에 없는 새 질문이 보이면(방금 보낸 질문 등) 잠시 뒤 한 번 다시 받는다
+        scheduleRefetch(unknownIds) {
+            const signature = unknownIds.join(',');
+            if (!signature || signature === this.apiRefetchedFor || this.apiRefetchTimer) return;
+            this.apiRefetchTimer = setTimeout(() => {
+                this.apiRefetchTimer = null;
+                this.apiRefetchedFor = signature;
+                this.fetchApi();
+            }, 4000);
         }
-        // Claude 첨부 전용 턴: 래퍼 innerText에 타임스탬프("Jun 4")와 아이콘 폰트 글리프가 섞이므로
-        // innerText 대신 썸네일 파일명을 식별자로 사용 (마커 툴팁과 달리 팝업은 fast text를 그대로 노출)
-        if (this.site === 'claude' &&
-            question.matches?.('[data-test-render-count]') &&
-            !question.querySelector('[data-testid="user-message"]')) {
-            const thumbNames = Array.from(question.querySelectorAll('[data-testid="file-thumbnail"] h3'))
-                .map(h => (h.textContent || '').trim())
-                .filter(Boolean);
-            if (thumbNames.length > 0) return thumbNames.join(', ');
-            // 이미지 썸네일은 data-testid가 파일명이라 h3가 없을 수 있음 → 공통 클래스/이미지로 판정
-            if (question.querySelector('[class*="group/thumbnail"], img')) return chrome.i18n.getMessage('imageAttachment');
+
+        // ---------------- 갱신 ----------------
+
+        scheduleRefresh(delay = 200) {
+            if (this.destroyed) return;
+            if (delay === 0 && this.refreshTimer) {
+                clearTimeout(this.refreshTimer);
+                this.refreshTimer = null;
+            }
+            if (this.refreshTimer) return;
+            this.refreshTimer = setTimeout(() => {
+                this.refreshTimer = null;
+                requestAnimationFrame(() => this.refreshNow());
+            }, delay);
         }
-        const plain = (question.innerText || question.textContent || '').trim();
-        if (plain) return plain;
-        const scope = this.getQuestionWrapper(question) || question;
-        // 파일 썸네일만 있는 질문(Claude는 첨부 전용이어도 빈 user-message가 렌더됨):
-        // 썸네일 파일명을 식별자로 사용해 마커 생성 누락 방지
-        const thumbNames = Array.from(scope.querySelectorAll('[data-testid="file-thumbnail"] h3'))
-            .map(h => (h.textContent || '').trim())
-            .filter(Boolean);
-        if (thumbNames.length > 0) return thumbNames.join(', ');
-        if (scope.querySelector('img')) return chrome.i18n.getMessage('imageAttachment');
-        return '';
-    }
 
-    buildStructuredTextFromPlain(plain) {
-        if (!plain) return '';
-        // 아이콘 노이즈 제거 후 you said 제거, 공백 정리, HTML 이스케이프
-        const withoutIcons = String(plain)
-            .replace(/\[[^\]]*icon[^\]]*\]/ig, ' ')
-            .replace(/\([^\)]*icon[^\)]*\)/ig, ' ')
-            .trim();
-        const cleaned = window.WITQ.text.stripYouSaid(withoutIcons).replace(/\s+/g, ' ').trim();
-        return window.WITQ.text.escapeHtml(cleaned);
-    }
+        refreshNow() {
+            if (this.destroyed) return;
+            if (this.refreshTimer) {
+                clearTimeout(this.refreshTimer);
+                this.refreshTimer = null;
+            }
+            try {
+                this.refresh();
+            } catch (e) {
+                if (this.debug) console.warn('[WITQ] refresh failed', e);
+            }
+        }
 
-    scheduleWarmupUpdates() {
-        this.cancelWarmupUpdates();
-        [180, 900, 2000, 4000].forEach(delay => {
-            const timerId = setTimeout(() => this.scheduleUpdate(true, 0), delay);
-            this.warmupTimers.push(timerId);
-        });
-    }
+        refresh() {
+            if (!W.storage.contextAlive()) {
+                // 확장이 재로드되어 이 인스턴스는 고아가 됨
+                this.destroy();
+                return;
+            }
+            // 숨겨진 화면(새 채팅으로 갔을 때 남아있는 이전 대화 등)의 질문은 제외
+            const live = site.liveQuestions().filter(q => q.turnEl && q.turnEl.getClientRects().length > 0);
+            const container = W.dom.resolveContainer(site.scrollContainer(live[0] && live[0].turnEl), live[0] && live[0].turnEl);
+            this.container = container;
+            const height = Math.max(container.scrollHeight, 1);
 
-    cancelWarmupUpdates() {
-        this.warmupTimers.forEach(timerId => clearTimeout(timerId));
-        this.warmupTimers = [];
-    }
+            const measured = live.map(q => ({ q, pos: W.dom.positionIn(q.turnEl, container) }));
+            this.applyShift(measured, height);
+            this.lastHeight = height;
 
-    scheduleUpdate(force = false, delay = 0) {
-        if (this.destroyed) return;
-        this.pendingForceUpdate = this.pendingForceUpdate || force;
-        clearTimeout(this.debounceTimeout);
-        this.debounceTimeout = setTimeout(() => {
-            if (this.updateRafId !== null) return;
-            this.updateRafId = requestAnimationFrame(() => {
-                this.updateRafId = null;
-                const elapsed = Date.now() - this.lastUpdateTime;
-                if (elapsed < this.minUpdateInterval) {
-                    this.scheduleUpdate(this.pendingForceUpdate, this.minUpdateInterval - elapsed);
-                    return;
+            for (const it of this.items.values()) {
+                it.live = false;
+                it.turnEl = null;
+                it.bubbleEl = null;
+            }
+            for (const { q, pos } of measured) {
+                let it = this.items.get(q.id);
+                if (!it) {
+                    it = { id: q.id };
+                    this.items.set(q.id, it);
                 }
-                const forceNow = this.pendingForceUpdate;
-                this.pendingForceUpdate = false;
-                this.lastUpdateTime = Date.now();
-                this.updateMarkers(forceNow);
-            });
-        }, delay);
-    }
-
-    async updateMarkers(force = false) {
-        if (this.destroyed) return;
-        if (this.isUpdating) {
-            this.pendingUpdateAfterRun = this.pendingUpdateAfterRun || force;
-            return;
-        }
-        this.isUpdating = true;
-        try {
-            // URL 변경 감지 (SPA 대화 전환). 스캔 중이라도 잔존 마커를 즉시 비우기 위해
-            // isScanning 가드보다 먼저 처리한다.
-            if (this.lastUrl !== location.href) {
-                this.lastUrl = location.href;
-                // 새 대화 진입: 로딩 램프업 게이트를 위해 진입 시각 갱신.
-                // grownUnderWatch는 비우지 않는다 — 한 세션에서 길러온 대화는 재진입해도 스캔 생략 유지.
-                this.currentConvMountTime = Date.now();
-                this.resetMarkers();
-                // 대화 진입 시마다 재스캔 허용: 캐시는 유지(마커 즉시 표시)하되
-                // 스캔 완료 표식을 지워 긴 페이지면 자동 스캔이 다시 돌게 한다.
-                this.scannedKeys.delete(window.WITQ.storage.getConversationKey());
-                // SPA 대화 전환 시 즐겨찾기 집합을 새 대화 키 기준으로 재구성
-                this.rebuildFavoriteIds();
-                this.scheduleWarmupUpdates();
-                this.startObserver();
+                it.pos = pos;
+                it.live = true;
+                it.turnEl = q.turnEl;
+                it.bubbleEl = q.bubbleEl;
+                it.domText = q.text;
+                it.domAttachments = q.attachments;
+                it.domImages = q.images;
             }
 
-            // 스캔 중에는 마커 갱신 억제(렌더 churn 방지). 스캔 완료 후 scheduleUpdate(true,0)가
-            // 전체 갱신을 하며, 그 setTimeout+rAF 콜백은 finally의 isScanning=false 뒤에 실행되므로 유실 없음.
-            if (this.isScanning) return;
+            const ordered = this.buildOrderedList();
+            const complete = !site.loadsOlderOnTop || !this.apiList || this.sawFirstQuestion;
+            const result = W.layout.computeLayout(ordered, { height, complete });
+            this.layout = { ordered, fractions: result.fractions, loadedStart: result.loadedStart, height };
 
-            const liveDomQuestions = this.getQuestions();
+            this.maybeMigrateFavorites(ordered);
+            this.render(container);
+            this.sendPopupUpdate();
+        }
 
-            this.ensureScrollbarContainer();
-
-            const container = window.WITQ.dom.getScrollContainer();
-            const totalHeight = (container === window)
-                ? Math.max(document.documentElement.scrollHeight, window.innerHeight, 1)
-                : Math.max(container.scrollHeight, container.clientHeight, 1);
-
-            const convKey = window.WITQ.storage.getConversationKey();
-            const cacheEntry = window.WITQ.storage.getScanCache(convKey);
-            const cached = cacheEntry ? cacheEntry.questions : [];
-            const scanHeight = cacheEntry ? cacheEntry.scanHeight : 0;
-            // 마커 % 분모: 스캔 좌표계와 현재 높이 중 큰 값. 재진입 시 현재 높이가 작아도
-            // scanHeight로 고정돼 마커가 흔들리지 않고, 새 질문으로 더 커지면 현재 높이를 따른다.
-            const effHeight = Math.max(scanHeight, totalHeight);
-
-            // 캐시 엔트리를 id 기반 Map으로 변환 (O(1) 조회용)
-            const cachedById = new Map();
-            for (const entry of cached) {
-                cachedById.set(entry.id, entry);
-            }
-
-            // 라이브 측정값으로 캐시 position을 덮어쓸지 여부: 현재 높이가 스캔 좌표계와
-            // 충분히 일치할 때만 허용 (축소된 가상화 상태에서 캐시 오염 방지)
-            const allowCacheOverwrite = !scanHeight ||
-                Math.abs(totalHeight - scanHeight) / scanHeight < 0.1;
-
-            // 현재 DOM에 있는 질문의 id 기반 데이터 맵
-            const liveById = new Map();
-            liveDomQuestions.forEach((question, index) => {
-                const data = this.getOrUpdateQuestionData(question, container, index, liveDomQuestions);
-                if (!data || !data.text) return;
-                liveById.set(data.id, { ...data, element: question });
-                // 캐시 position 갱신 (좌표계가 일치할 때만 — 라이브 측정값이 더 정확)
-                if (allowCacheOverwrite && cachedById.has(data.id)) {
-                    cachedById.get(data.id).position = data.position;
+        // 위쪽에 예전 대화가 끼어들거나 높이 추정이 바뀌면 화면 밖 질문의 기억된 위치도 같이 밀어준다
+        applyShift(measured, height) {
+            const pairs = [];
+            let minPrevLive = Infinity;
+            for (const { q, pos } of measured) {
+                const it = this.items.get(q.id);
+                if (it && it.pos !== null && it.pos !== undefined) {
+                    pairs.push({ prev: it.pos, now: pos });
+                    minPrevLive = Math.min(minPrevLive, it.pos);
                 }
+            }
+            const shift = W.layout.medianShift(pairs);
+            if (Math.abs(shift) <= 2) return;
+            const dH = height - this.lastHeight;
+            // 전체 높이가 같은 만큼 늘었으면 맨 위에 내용이 추가된 것 → 모든 질문이 밀림
+            const wholeShift = this.lastHeight > 0 && Math.abs(dH - shift) <= Math.max(40, Math.abs(shift) * 0.2);
+            const liveIds = new Set(measured.map(m => m.q.id));
+            for (const it of this.items.values()) {
+                if (liveIds.has(it.id) || it.pos === null || it.pos === undefined) continue;
+                if (wholeShift || it.pos > minPrevLive) it.pos += shift;
+            }
+        }
+
+        buildOrderedList() {
+            const fromItem = (it) => ({
+                id: it.id,
+                text: it.domText || '',
+                attachments: it.domAttachments || [],
+                images: it.domImages || 0,
+                weightStart: null,
+                pos: it.pos,
+                live: !!it.live
             });
 
-            // 합집합 구성: 캐시 + 라이브. 좌표계 불일치 시 표시 position은 캐시(스캔 좌표계)를 유지
-            const unionById = new Map(cachedById);
-            for (const [id, liveEntry] of liveById) {
-                const cachedEntry = cachedById.get(id);
-                if (cachedEntry && !allowCacheOverwrite) {
-                    unionById.set(id, { ...liveEntry, position: cachedEntry.position });
-                } else {
-                    unionById.set(id, liveEntry);
-                }
+            if (!this.apiList) {
+                return Array.from(this.items.values())
+                    .filter(it => it.pos !== null && it.pos !== undefined)
+                    .sort((a, b) => a.pos - b.pos)
+                    .map(fromItem);
             }
 
-            // 점진 캐시 누적: 현재 렌더된 질문을 대화 캐시에 합쳐, 가상화로 unmount돼도
-            // 마커/네비게이션 캐시가 유지되게 한다. (강제 스캔 없이 옛 질문 보존)
-            // 좌표계 불일치 시엔 union과 동일하게 기존 캐시 position을 보존하고 텍스트만 갱신한다.
-            if (liveById.size > 0) {
-                const accumById = new Map(cachedById); // 기존 캐시 (position in-place 갱신 반영됨)
-                for (const [id, liveEntry] of liveById) {
-                    const existing = accumById.get(id);
-                    if (existing && !allowCacheOverwrite) {
-                        accumById.set(id, { id, text: liveEntry.text, position: existing.position });
-                    } else {
-                        accumById.set(id, { id, text: liveEntry.text, position: liveEntry.position });
-                    }
-                }
-                const accumList = Array.from(accumById.values())
-                    .map(e => ({ id: e.id, text: e.text, position: e.position }))
-                    .sort((a, b) => a.position - b.position);
-                window.WITQ.storage.setScanCache(convKey, {
-                    questions: accumList,
-                    scanHeight: Math.max(scanHeight, totalHeight)
-                });
+            const apiIds = new Set(this.apiList.map(q => q.id));
+            const starts = W.layout.weightStarts(this.apiList.map(q => q.weight));
+            const ordered = this.apiList.map((q, i) => {
+                const it = this.items.get(q.id);
+                return {
+                    id: q.id,
+                    text: q.text,
+                    attachments: q.attachments || [],
+                    images: q.images || 0,
+                    weightStart: starts[i],
+                    pos: it && it.pos !== undefined ? it.pos : null,
+                    live: !!(it && it.live)
+                };
+            });
+            if (this.apiList.length > 0) {
+                const first = this.items.get(this.apiList[0].id);
+                if (first && first.pos !== null && first.pos !== undefined) this.sawFirstQuestion = true;
             }
 
-            if (this.debug) console.log('[WITQ] update', { live: liveDomQuestions.length, cached: cached.length, union: unionById.size, container: container === window ? 'window' : 'element', totalHeight, scanHeight, effHeight });
+            const extras = Array.from(this.items.values())
+                .filter(it => !apiIds.has(it.id) && it.pos !== null && it.pos !== undefined)
+                .sort((a, b) => a.pos - b.pos);
+            extras.forEach(it => ordered.push(fromItem(it)));
+            const unknownLive = extras.filter(it => it.live).map(it => it.id);
+            if (unknownLive.length > 0) this.scheduleRefetch(unknownLive);
+            return ordered;
+        }
 
-            if (unionById.size === 0) {
-                if (this.markers.size === 0) {
-                    this.scrollbarContainer.style.display = 'none';
-                }
-                this.scrollbarContainer.innerHTML = '';
-                window.WITQ.storage.safeSendQuestionList([]);
+        // ---------------- 표시 ----------------
+
+        buildUi() {
+            this.bar = document.createElement('div');
+            this.bar.id = 'witq-bar';
+            this.bar.style.display = 'none';
+
+            this.tooltip = document.createElement('div');
+            this.tooltip.id = 'witq-tooltip';
+            this.tooltipAttach = document.createElement('div');
+            this.tooltipAttach.className = 'witq-tooltip-attachment';
+            this.tooltipMain = document.createElement('div');
+            this.tooltipMain.className = 'witq-tooltip-main';
+            this.tooltip.append(this.tooltipAttach, this.tooltipMain);
+
+            (document.body || document.documentElement).append(this.bar, this.tooltip);
+        }
+
+        render(container) {
+            const { ordered, fractions } = this.layout;
+            if (ordered.length === 0) {
+                this.bar.style.display = 'none';
+                this.markers.forEach(m => m.remove());
                 this.markers.clear();
                 return;
             }
 
-            this.scrollbarContainer.style.display = 'block';
-            if (this.warmupTimers.length > 0) this.cancelWarmupUpdates();
+            const rect = W.dom.visibleRect(container);
+            this.bar.style.display = 'block';
+            this.bar.style.top = `${Math.max(0, rect.top)}px`;
+            this.bar.style.height = `${Math.max(0, rect.height)}px`;
+            this.bar.style.right = `${Math.max(0, window.innerWidth - rect.right)}px`;
+            const usable = Math.max(0, rect.height - 6);
 
-            // 1. 더 이상 합집합에 없는 마커 제거
-            for (const [id, entry] of this.markers.entries()) {
-                if (!unionById.has(id)) {
-                    entry.marker.remove();
-                    // 라이브 요소가 있을 때만 별표 제거
-                    if (entry.element && document.body.contains(entry.element)) {
-                        const wrapper = this.getQuestionWrapper(entry.element);
-                        const star = wrapper ? wrapper.querySelector('.witq-favorite-star') : null;
-                        if (star) star.remove();
-                    }
+            const keep = new Set();
+            ordered.forEach((entry, i) => {
+                keep.add(entry.id);
+                let marker = this.markers.get(entry.id);
+                if (!marker) {
+                    marker = this.createMarker(entry.id);
+                    this.markers.set(entry.id, marker);
+                    this.bar.appendChild(marker);
+                }
+                marker.style.top = `${Math.round(fractions[i] * usable)}px`;
+                marker.classList.toggle('favorite', this.favoriteIds.has(entry.id));
+                marker.classList.toggle('in-view', entry.live && this.isInView(entry.id, rect));
+            });
+            for (const [id, marker] of this.markers) {
+                if (!keep.has(id)) {
+                    marker.remove();
                     this.markers.delete(id);
                 }
             }
 
-            // 2. 마커 추가/갱신
-            const questionsForPopup = [];
-            // position 오름차순으로 처리 (팝업용 목록 순서 보장)
-            const sortedEntries = Array.from(unionById.values())
-                .sort((a, b) => a.position - b.position);
-
-            const starJobs = [];
-
-            for (const entryData of sortedEntries) {
-                const id = entryData.id;
-                const liveEl = liveById.has(id) ? liveById.get(id).element : null;
-
-                let existing = this.markers.get(id);
-                if (!existing) {
-                    const marker = this.createMarkerElement(id, liveEl, entryData, effHeight, starJobs);
-                    this.scrollbarContainer.appendChild(marker);
-                    existing = { marker, element: liveEl, position: entryData.position, text: entryData.text };
-                    this.markers.set(id, existing);
-                } else {
-                    // 라이브 요소 레퍼런스 갱신
-                    existing.element = liveEl;
-                    existing.position = entryData.position;
-                    existing.text = entryData.text;
-                    this.updateMarkerElement(existing.marker, liveEl, entryData, effHeight, starJobs);
-                }
-
-                questionsForPopup.push({
-                    id,
-                    text: entryData.text,
-                    position: entryData.position
-                });
-            }
-
-            // 3. 즐겨찾기 별 일괄 배치 — 읽기(rect/offsetWidth 측정) 전부 → 쓰기(style) 전부 순으로
-            // 묶어, 별마다 강제 리플로우가 반복되는 레이아웃 스래싱을 방지 (측정 1회로 수렴)
-            if (starJobs.length > 0) {
-                const measured = starJobs.map(job => {
-                    const wRect = job.wrapper.getBoundingClientRect();
-                    const qRect = job.el.getBoundingClientRect();
-                    // offsetWidth가 아직 0이면 font-size 기준 폴백 (positionFavoriteStar와 동일)
-                    const starWidth = job.star.offsetWidth || 64;
-                    return {
-                        star: job.star,
-                        left: qRect.left - wRect.left - starWidth - 8,
-                        top: qRect.top - wRect.top
-                    };
-                });
-                for (const m of measured) {
-                    m.star.style.left = `${m.left}px`;
-                    m.star.style.top = `${m.top}px`;
-                }
-            }
-
-            // 방어적 청소: this.markers에 속하지 않은 잔존 자식 요소 제거
-            const known = new Set(Array.from(this.markers.values(), e => e.marker));
-            for (const child of Array.from(this.scrollbarContainer.children)) {
-                if (!known.has(child)) child.remove();
-            }
-
-            // 팝업에 전체 목록 전송 (캐시 포함)
-            window.WITQ.storage.safeSendQuestionList(questionsForPopup);
-
-            // 자동 스캔: 진입 시 이미 길었던 대화만 대상. 짧을 때부터 써온 세션은
-            // 점진 캐시로 질문을 이미 모았으므로 강제 스캔(맨 위로 스크롤)을 생략한다.
-            const viewportHeight = (container === window) ? window.innerHeight : container.clientHeight;
-            const isLongPage = totalHeight > viewportHeight * 3;
-            // 초기 로딩 램프업(높이가 점점 커지는 구간)을 진입-긴-대화로 오판하지 않도록,
-            // 진입 후 일정 시간이 지나서도 여전히 짧을 때만 "지켜본 대화"로 표시한다.
-            const convSettled = Date.now() - this.currentConvMountTime > 5000;
-            if (!isLongPage && convSettled) {
-                this.grownUnderWatch.add(convKey);
-            }
-            if (isLongPage && !this.scannedKeys.has(convKey) && !this.isScanning &&
-                !this.grownUnderWatch.has(convKey)) {
-                this.scanAllQuestions();
-            }
-        } catch (error) {
-            // 마커 업데이트 실패 (무음 처리)
-        } finally {
-            this.isUpdating = false;
-            if (this.pendingUpdateAfterRun) {
-                const nextForce = this.pendingUpdateAfterRun;
-                this.pendingUpdateAfterRun = false;
-                this.scheduleUpdate(nextForce, 120);
-            }
+            this.renderStars();
         }
-    }
 
-    resetMarkers() {
-        if (this.scrollbarContainer) {
-            this.scrollbarContainer.innerHTML = '';
-            this.scrollbarContainer.style.display = 'none';
+        isInView(id, rect) {
+            const it = this.items.get(id);
+            if (!it || !it.turnEl) return false;
+            const r = (it.bubbleEl || it.turnEl).getBoundingClientRect();
+            return r.bottom > rect.top && r.top < rect.bottom;
         }
-        this.markers.clear();
-        this.observerRetryCount = 0;
-        window.WITQ.storage.safeSendQuestionList([]);
-    }
 
-    ensureScrollbarContainer() {
-        if (!this.scrollbarContainer) {
-            this.scrollbarContainer = document.getElementById('question-scrollbar-container');
-            if (!this.scrollbarContainer) {
-                this.scrollbarContainer = document.createElement('div');
-                this.scrollbarContainer.id = 'question-scrollbar-container';
-                document.body.appendChild(this.scrollbarContainer);
+        createMarker(id) {
+            const marker = document.createElement('div');
+            marker.className = 'witq-marker';
+            marker.addEventListener('mouseenter', () => this.showTooltip(id, marker));
+            marker.addEventListener('mouseleave', () => this.hideTooltip());
+            marker.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.hideTooltip(true);
+                this.navigate(id);
+            });
+            marker.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                this.toggleFavorite(id);
+            });
+            return marker;
+        }
+
+        attachmentLabel(entry) {
+            const labels = [];
+            if (entry.images > 0) {
+                labels.push(entry.images > 1 ? `${MSG('imageLabel')} ×${entry.images}` : MSG('imageLabel'));
             }
+            (entry.attachments || []).forEach(n => labels.push(n));
+            return labels.length ? `${labels.join(', ')} ${MSG('attachmentSuffix')}` : '';
         }
-    }
 
-    getOrUpdateQuestionData(question, container, index, allQuestions = null) {
-        let cached = this.questionDataCache.get(question);
-        const currentPos = window.WITQ.dom.getQuestionPositionInContainer(question, container);
-
-        if (!cached || Math.abs(cached.position - currentPos) > 1 || cached.index !== index) {
-            const plainFallback = this.getPlainIdentity(question);
-            if (!plainFallback) return null;
-            const fastText = this.buildStructuredTextFromPlain(plainFallback);
-
-            cached = {
-                text: fastText,
-                detailedText: null,
-                position: currentPos,
-                index,
-                id: this.generateQuestionId(question, plainFallback, allQuestions || this.getQuestions())
-            };
-            this.questionDataCache.set(question, cached);
+        previewText(entry) {
+            const text = (entry.text || '').replace(/\s+/g, ' ').trim();
+            if (text) return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+            return this.attachmentLabel(entry) || MSG('imageAttachment');
         }
-        return cached;
-    }
 
-    ensureDetailedQuestionText(question, data) {
-        if (!data || data.detailedText) return data;
-        let detailed = this.config.getQuestionText(question);
-        const hasRenderableText = !!(detailed && detailed.replace(/<[^>]+>/g, '').trim());
-        if (!hasRenderableText) {
-            const plainFallback = this.getPlainIdentity(question);
-            if (plainFallback) {
-                detailed = this.buildStructuredTextFromPlain(plainFallback);
-            } else {
-                return data;
-            }
+        showTooltip(id, marker) {
+            clearTimeout(this.tooltipHideTimer);
+            const entry = this.layout.ordered.find(o => o.id === id);
+            if (!entry) return;
+            const attach = this.attachmentLabel(entry);
+            const text = (entry.text || '').replace(/\s+/g, ' ').trim();
+            this.tooltipAttach.textContent = attach;
+            this.tooltipAttach.style.display = attach ? '' : 'none';
+            this.tooltipMain.textContent = text.length > 500 ? `${text.slice(0, 500)}…` : text;
+            this.tooltipMain.style.display = text ? '' : 'none';
+            if (!attach && !text) this.tooltipMain.textContent = MSG('imageAttachment');
+            if (!attach && !text) this.tooltipMain.style.display = '';
+
+            const m = marker.getBoundingClientRect();
+            this.tooltip.style.right = `${Math.max(8, window.innerWidth - m.left + 8)}px`;
+            this.tooltip.classList.add('visible');
+            const h = this.tooltip.offsetHeight;
+            const top = Math.min(Math.max(8, m.top + m.height / 2 - h / 2), window.innerHeight - h - 8);
+            this.tooltip.style.top = `${top}px`;
         }
-        data.detailedText = detailed;
-        return data;
-    }
 
-    formatTooltipHtml(raw) {
-        if (!raw) return '';
-        let html = String(raw);
-        html = html.replace(/&lt;br\s*\/?&gt;/ig, '<br>');
-        html = html.replace(/<\/div>\s*<div>/ig, '<br>');
-        html = html.replace(/^<div>/i, '').replace(/<\/div>$/i, '');
-
-        // 접근성/아이콘 노이즈 제거
-        html = html
-            .replace(/\[[^\]]*icon[^\]]*\]\s*/ig, '')
-            .replace(/\([^\)]*icon[^\)]*\)\s*/ig, '')
-            .replace(/\byou\s*said\b\s*:?\s*/ig, ' ')
-            .trim();
-
-        return html;
-    }
-
-    generateQuestionId(question, plainText, allQuestions) {
-        const normalized = window.WITQ.text.normalizePlainText(plainText);
-        const hash = window.WITQ.text.hashString(normalized);
-        let occurrence = 0;
-        for (const q of allQuestions) {
-            if (q === question) break;
-            const qPlain = this.getPlainIdentity(q);
-            if (window.WITQ.text.normalizePlainText(qPlain) === normalized) occurrence++;
-        }
-        return occurrence === 0 ? hash : `${hash}-${occurrence}`;
-    }
-
-    // --- 스캔 기능 ---
-
-    // minWaitMs를 무조건 먼저 대기(사이트가 스크롤에 반응해 렌더 시작할 시간 확보)한 뒤,
-    // DOM 변경이 quietMs 동안 없거나 timeoutMs 초과 시 resolve. mutation을 본 적이 있는지(sawMutation) 반환.
-    async waitForDomSettle(target, quietMs = 200, timeoutMs = 1500, minWaitMs = 150) {
-        // 1. 스크롤 반응 렌더가 시작될 시간 확보
-        await new Promise(r => setTimeout(r, minWaitMs));
-
-        // 2. quiet 감지
-        return new Promise((resolve) => {
-            let quietTimer = null;
-            let sawMutation = false;
-            const observerTarget = (target === window) ? document.body : target;
-
-            const finish = () => {
-                observer.disconnect();
-                clearTimeout(quietTimer);
-                clearTimeout(hardTimer);
-                resolve(sawMutation);
-            };
-
-            const reset = () => {
-                sawMutation = true;
-                clearTimeout(quietTimer);
-                quietTimer = setTimeout(finish, quietMs);
-            };
-
-            const observer = new MutationObserver(reset);
-            observer.observe(observerTarget, { childList: true, subtree: true });
-
-            // 초기 quiet 타이머 시작
-            quietTimer = setTimeout(finish, quietMs);
-            // 하드 타임아웃
-            const hardTimer = setTimeout(finish, timeoutMs);
-        });
-    }
-
-    // 스캔 진행 중 표시 배지 표시/제거
-    _showScanIndicator() {
-        let el = document.getElementById('witq-scan-indicator');
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'witq-scan-indicator';
-            el.textContent = chrome.i18n.getMessage('scanning');
-            document.body.appendChild(el);
-        }
-    }
-
-    _hideScanIndicator() {
-        const el = document.getElementById('witq-scan-indicator');
-        if (el) el.remove();
-    }
-
-    // 전체 대화 스캔: DOM 가상화 대응을 위해 스크롤을 내려가며 모든 질문 위치 수집
-    async scanAllQuestions() {
-        if (this.isScanning) return;
-
-        const convKey = window.WITQ.storage.getConversationKey();
-        if (this.scannedKeys.has(convKey)) return;
-
-        this.isScanning = true;
-        this._showScanIndicator();
-
-        const container = window.WITQ.dom.getScrollContainer();
-        const isWindow = container === window;
-
-        // 현재 스크롤 위치 저장
-        const originalScrollTop = isWindow ? window.scrollY : container.scrollTop;
-
-        // 스크롤 헬퍼는 finally에서도 복원에 사용하므로 try 밖 함수 스코프에 둔다
-        const getScrollHeight = () => isWindow
-            ? document.documentElement.scrollHeight
-            : container.scrollHeight;
-        const getClientHeight = () => isWindow
-            ? window.innerHeight
-            : container.clientHeight;
-        const setScrollTop = (val) => {
-            if (isWindow) window.scrollTo(0, val);
-            else container.scrollTop = val;
-        };
-
-        // 스캔 중 수집된 질문 데이터 (id -> 최신 측정값)
-        const collected = new Map();
-        const scanStart = Date.now();
-        // 대화 전환/teardown으로 중단된 경우: 다른 대화에 이전 스크롤 복원 금지
-        let abortedByNav = false;
-
-        try {
-            let currentScroll = 0;
-            // 연속 무변경 스텝 카운터: DOM mutation이 없는 스텝이 이어질수록 전진 폭 확대
-            let quietStreak = 0;
-
-            if (this.debug) {
-                console.log('[WITQ] scan start', { convKey, totalHeight: getScrollHeight() });
-            }
-
-            // 최상단부터 시작
-            setScrollTop(0);
-            await this.waitForDomSettle(container, 200, 1500, 150);
-
-            while (true) {
-                // 대화 전환/teardown 감지: 스캔 중단 (정리는 finally가 처리)
-                if (this.destroyed || window.WITQ.storage.getConversationKey() !== convKey) {
-                    abortedByNav = true;
-                    return;
-                }
-
-                const questions = this.getQuestions();
-                const allQuestionsSnapshot = questions; // ID 계산에 사용
-
-                let stepCount = 0;
-                let maxSeenTop = 0; // 이번 스텝에서 본 질문들의 최대 position (적응형 스텝용)
-                for (const el of questions) {
-                    const plain = this.getPlainIdentity(el);
-                    if (!plain) continue;
-
-                    const id = this.generateQuestionId(el, plain, allQuestionsSnapshot);
-                    const position = window.WITQ.dom.getQuestionPositionInContainer(el, container);
-                    const text = this.buildStructuredTextFromPlain(plain);
-
-                    // 이미 본 ID는 위치 값을 최신으로 덮어씀 (더 정확한 측정값)
-                    collected.set(id, { id, text, position });
-                    stepCount++;
-                    if (position > maxSeenTop) maxSeenTop = position;
-                }
-
-                if (this.debug) {
-                    console.log('[WITQ] scan step', { currentScroll, stepCount, total: collected.size, quietStreak });
-                }
-
-                const scrollHeight = getScrollHeight();
-                const clientHeight = getClientHeight();
-
-                // 하단 도달 판별
-                if (currentScroll + clientHeight >= scrollHeight - 1) break;
-
-                // 적응형 스텝: quietStreak에 따라 최소 전진 계수를 0.8~2.4로 확대.
-                // 조용한 구간 = 이미 렌더된 영역 통과 중이므로 빠르게 전진해도 질문을 놓치지 않는다.
-                // windowNext에 전진 상한(2.5뷰포트)을 둬서, 반대편 끝에 잔존한 렌더 창으로 인해
-                // maxSeenTop이 오판될 때 한 번에 멀리 점프해 중간 질문을 건너뛰는 폭주를 방지한다.
-                // max(minNext, windowNext)이므로 항상 minNext 이상 → 단조 증가 보장. 하단으로 clamp.
-                const stepFactor = Math.min(0.8 + 0.4 * quietStreak, 2.4);
-                const minNext = currentScroll + clientHeight * stepFactor;
-                const windowNext = Math.min(maxSeenTop - clientHeight * 0.5, currentScroll + clientHeight * 2.5);
-                currentScroll = Math.min(Math.max(minNext, windowNext), scrollHeight - clientHeight);
-
-                setScrollTop(currentScroll);
-                const sawMutation = await this.waitForDomSettle(container, 200, 1500, 150);
-                if (sawMutation) {
-                    // mutation 감지: 새 렌더가 시작됐으므로 연속 무변경 카운터 리셋
-                    quietStreak = 0;
-                } else if (quietStreak === 0) {
-                    // 첫 번째 무변경 스텝: 늦은 렌더 대비로 1회만 추가 대기
-                    const sawMutation2 = await this.waitForDomSettle(container, 200, 1000, 150);
-                    quietStreak = sawMutation2 ? 0 : 1;
-                } else {
-                    // 연속 무변경 구간: 추가 대기 생략하고 카운터 증가
-                    quietStreak++;
-                }
-            }
-
-            // 대화 전환/teardown 최종 확인 (정리는 finally가 처리)
-            if (this.destroyed || window.WITQ.storage.getConversationKey() !== convKey) {
-                abortedByNav = true;
+        hideTooltip(immediate = false) {
+            clearTimeout(this.tooltipHideTimer);
+            if (immediate) {
+                this.tooltip.classList.remove('visible');
                 return;
             }
-
-            // 스캔 완료 시점의 전체 높이 캡처 (마커 % 좌표계 기준). 복원 전에 측정한다.
-            const scanHeight = getScrollHeight();
-
-            // 위치 오름차순 정렬 후 캐시 저장 (좌표계 기준 scanHeight 동봉)
-            const sortedList = Array.from(collected.values())
-                .sort((a, b) => a.position - b.position);
-            window.WITQ.storage.setScanCache(convKey, { questions: sortedList, scanHeight });
-            this.scannedKeys.add(convKey);
-
-            if (this.debug) {
-                console.log('[WITQ] scan done', { questions: sortedList.length, scanHeight, ms: Date.now() - scanStart });
-            }
-
-            // 마커 즉시 갱신
-            this.scheduleUpdate(true, 0);
-        } catch (e) {
-            // 영구적 에러 시 세션당 대화별 1회만 시도하도록 스캔 완료로 표시
-            this.scannedKeys.add(convKey);
-        } finally {
-            // 중단된 경우 다른 대화/제거된 인스턴스에 이전 스크롤을 복원하지 않는다
-            if (!abortedByNav) setScrollTop(originalScrollTop);
-            this._hideScanIndicator();
-            this.isScanning = false;
-            // 대화 전환으로 중단됐다면 새 페이지 마커 생성을 보장
-            if (abortedByNav) this.scheduleUpdate(true, 0);
+            this.tooltipHideTimer = setTimeout(() => this.tooltip.classList.remove('visible'), 120);
         }
-    }
 
-    // 마커 클릭 시 이동: 긴 페이지는 즉시 점프(auto)로 통일,
-    // 짧은 페이지는 기존 smooth 유지.
-    // 사용자 입력(wheel/touchstart/keydown) 감지 시 대기/재점프를 즉시 중단.
-    async navigateToQuestion(id) {
-        const entry = this.markers.get(id);
-        if (!entry) return;
-
-        // 연타 가드: 새 클릭이 이전 이동을 취소
-        const token = ++this.navToken;
-
-        // 사용자 스크롤/입력 감지 → 대기 후 모든 재시도 중단
-        let userInterrupted = false;
-        const onUserInput = () => { userInterrupted = true; };
-        window.addEventListener('wheel', onUserInput, { passive: true, capture: true });
-        window.addEventListener('touchstart', onUserInput, { passive: true, capture: true });
-        window.addEventListener('keydown', onUserInput, { passive: true, capture: true });
-
-        try {
-            const container = window.WITQ.dom.getScrollContainer();
-            const isWindow = container === window;
-            const viewport = isWindow ? window.innerHeight : container.clientHeight;
-            const convKey = window.WITQ.storage.getConversationKey();
-            const cacheEntry = window.WITQ.storage.getScanCache(convKey);
-            const scanHeight = cacheEntry ? cacheEntry.scanHeight : 0;
-
-            // 스캔 캐시에서 스케일링 기준 position을 직접 읽어 좌표계 오염 방지.
-            // 캐시에 해당 id 항목이 없으면 entry.position으로 폴백.
-            let basePosition = entry.position;
-            if (cacheEntry && cacheEntry.questions) {
-                const cacheQuestion = cacheEntry.questions.find(q => q.id === id);
-                if (cacheQuestion) basePosition = cacheQuestion.position;
-            }
-
-            // id의 해시부 (순번 접미사 제거): 매칭에 사용
-            const expectedHash = String(id).split('-')[0];
-
-            // 스캔 캐시가 있거나 현재 높이가 충분히 길면 긴 페이지로 간주 → 즉시 점프
-            const currentHeightNow = isWindow ? document.documentElement.scrollHeight : container.scrollHeight;
-            const isLong = !!cacheEntry || currentHeightNow > viewport * 3;
-            const behavior = isLong ? 'auto' : 'smooth';
-
-            // 케이스 1: 이미 렌더된 요소면 실제 위치 재측정 후 이동.
-            // stale 요소 검증: 요소 텍스트 해시가 id 해시부와 일치해야 신뢰.
-            if (entry.element && document.body.contains(entry.element)) {
-                const elPlain = this.getPlainIdentity(entry.element);
-                const elHash = elPlain
-                    ? String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(elPlain)))
-                    : null;
-                if (elHash && elHash === expectedHash) {
-                    if (this.debug) console.log('[WITQ] nav', { id, case: 1, basePosition, scanHeight, liveHeight: isWindow ? document.documentElement.scrollHeight : container.scrollHeight });
-                    const pos = window.WITQ.dom.getQuestionPositionInContainer(entry.element, container);
-                    entry.position = pos;
-                    // 케이스 1 최초 이동: 클릭 직접 응답이므로 중단 체크 없이 수행
-                    window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
-                    return;
+        // 즐겨찾기한 질문 옆 별표. 화면에 렌더된 질문에만 붙인다.
+        renderStars() {
+            const jobs = [];
+            for (const it of this.items.values()) {
+                if (!it.live || !it.turnEl) continue;
+                const existing = it.turnEl.querySelector(':scope > .witq-star');
+                if (!this.favoriteIds.has(it.id)) {
+                    if (existing) existing.remove();
+                    continue;
                 }
-                // 해시 불일치: stale 요소로 간주하고 케이스 2로 진행
-            }
-
-            // 케이스 2: 캐시만 있음 — 앵커 기반 추정 위치로 점프 후 렌더 대기/탐색.
-            // 앵커: 현재 마운트된 질문 중 캐시에서 유일 해시로 식별 가능한 항목.
-            // jumpPos = 앵커 라이브 위치 + (basePosition - 앵커 캐시 위치).
-            // 앵커 없으면 비례 스케일링 폴백.
-
-            // 캐시 해시 맵 사전 구성: 해시부 → {position, count}.
-            // count > 1인 해시는 중복 텍스트라 앵커로 불가.
-            const cacheHashMap = new Map();
-            if (cacheEntry && cacheEntry.questions) {
-                for (const q of cacheEntry.questions) {
-                    const h = String(q.id).split('-')[0];
-                    const existing = cacheHashMap.get(h);
-                    if (existing) {
-                        existing.count++;
-                    } else {
-                        cacheHashMap.set(h, { position: q.position, count: 1 });
+                let star = existing;
+                if (!star) {
+                    if (window.getComputedStyle(it.turnEl).position === 'static') {
+                        it.turnEl.style.position = 'relative';
                     }
+                    star = document.createElement('div');
+                    star.className = 'witq-star';
+                    star.textContent = '★';
+                    it.turnEl.appendChild(star);
                 }
+                jobs.push({ star, turn: it.turnEl, bubble: it.bubbleEl || it.turnEl });
             }
-
-            // 현재 liveHeight를 재측정해 반환하는 헬퍼
-            const getLiveHeight = () => isWindow ? document.documentElement.scrollHeight : container.scrollHeight;
-
-            // 앵커 없을 때 쓰는 비례 스케일링 폴백
-            const fallbackJumpPos = () => {
-                const liveHeight = getLiveHeight();
-                return scanHeight ? basePosition * (liveHeight / scanHeight) : basePosition;
-            };
-
-            if (this.debug) console.log('[WITQ] nav', { id, case: 2, basePosition, scanHeight, liveHeight: getLiveHeight() });
-
-            // 최초 점프: 초기 렌더 목록으로 앵커를 탐색하고 앵커 기반 jumpPos 계산,
-            // 앵커 없으면 폴백 스케일링으로 1회 점프.
-            const initialQuestions = this.getQuestions();
-            let initialAnchors = [];
-            for (const el of initialQuestions) {
-                const plain = this.getPlainIdentity(el);
-                if (!plain) continue;
-                const h = String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(plain)));
-                const cached = cacheHashMap.get(h);
-                if (cached && cached.count === 1 && h !== expectedHash) {
-                    initialAnchors.push({ el, cachePos: cached.position });
-                }
-            }
-
-            let jumpPos;
-            if (initialAnchors.length > 0) {
-                // basePosition에 가장 가까운 앵커를 선택해 초기 jumpPos 계산
-                let best = initialAnchors[0];
-                let bestDist = Math.abs(best.cachePos - basePosition);
-                for (let i = 1; i < initialAnchors.length; i++) {
-                    const d = Math.abs(initialAnchors[i].cachePos - basePosition);
-                    if (d < bestDist) { bestDist = d; best = initialAnchors[i]; }
-                }
-                const anchorLivePos = window.WITQ.dom.getQuestionPositionInContainer(best.el, container);
-                jumpPos = Math.max(anchorLivePos + (basePosition - best.cachePos), 0);
-            } else {
-                jumpPos = fallbackJumpPos();
-            }
-            // 케이스 2 최초 점프: 클릭 직접 응답이므로 중단 체크 없이 수행
-            window.WITQ.dom.scrollToQuestionPosition(jumpPos, container, 'auto');
-
-            const maxAttempts = 3;
-            for (let attempt = 0; attempt < maxAttempts; attempt++) {
-                const sawMutation = await this.waitForDomSettle(container, 150, 800, 120);
-                // 늦은 렌더 대비: mutation을 못 봤으면 이 시도에서 1회만 추가 대기
-                if (!sawMutation) {
-                    await this.waitForDomSettle(container, 150, 600, 120);
-                }
-
-                // 연타 가드: 새 클릭이 들어왔으면 중단
-                if (token !== this.navToken) {
-                    if (this.debug) console.log('[WITQ] nav abort', { id, reason: 'superseded' });
-                    return;
-                }
-
-                // 사용자 입력으로 중단
-                if (userInterrupted) {
-                    if (this.debug) console.log('[WITQ] nav abort', { id, reason: 'user-input' });
-                    return;
-                }
-
-                // 대화 전환 감지 시 중단
-                if (window.WITQ.storage.getConversationKey() !== convKey) return;
-
-                // sweep 한 번으로 목표 후보와 앵커 후보를 동시 수집
-                const questions = this.getQuestions();
-                const candidates = []; // 목표 후보 (expectedHash 일치)
-                const anchors = [];    // 앵커 후보 (캐시에서 유일 해시, count === 1)
-                for (const el of questions) {
-                    const plain = this.getPlainIdentity(el);
-                    if (!plain) continue;
-                    const h = String(window.WITQ.text.hashString(window.WITQ.text.normalizePlainText(plain)));
-                    if (h === expectedHash) {
-                        candidates.push(el);
-                    } else {
-                        const cached = cacheHashMap.get(h);
-                        if (cached && cached.count === 1) {
-                            anchors.push({ el, cachePos: cached.position });
-                        }
-                    }
-                }
-
-                // 앵커 기반 jumpPos 재계산: basePosition에 가장 가까운 앵커 선택
-                let selectedAnchorCachePos = null;
-                if (anchors.length > 0) {
-                    let best = anchors[0];
-                    let bestDist = Math.abs(best.cachePos - basePosition);
-                    for (let i = 1; i < anchors.length; i++) {
-                        const d = Math.abs(anchors[i].cachePos - basePosition);
-                        if (d < bestDist) { bestDist = d; best = anchors[i]; }
-                    }
-                    selectedAnchorCachePos = best.cachePos;
-                    const anchorLivePos = window.WITQ.dom.getQuestionPositionInContainer(best.el, container);
-                    jumpPos = Math.max(anchorLivePos + (basePosition - best.cachePos), 0);
-                } else {
-                    // 앵커 없으면 비례 스케일링 폴백
-                    jumpPos = fallbackJumpPos();
-                }
-
-                // 해시 일치 후보 중 jumpPos에 가장 가까운 요소 선택
-                let found = null;
-                if (candidates.length === 1) {
-                    found = candidates[0];
-                } else if (candidates.length > 1) {
-                    // 해시 일치 후보가 여러 개: 직전 jumpPos 기준으로 가장 가까운 요소 선택
-                    let minDist = Infinity;
-                    for (const el of candidates) {
-                        const elPos = window.WITQ.dom.getQuestionPositionInContainer(el, container);
-                        const dist = Math.abs(elPos - jumpPos);
-                        if (dist < minDist) {
-                            minDist = dist;
-                            found = el;
-                        }
-                    }
-                }
-
-                if (this.debug) console.log('[WITQ] nav attempt', { attempt, jumpPos, anchorCachePos: selectedAnchorCachePos, anchors: anchors.length, liveHeight: getLiveHeight(), found: !!found });
-
-                if (found) {
-                    const pos = window.WITQ.dom.getQuestionPositionInContainer(found, container);
-                    // 캐시/마커 entry 위치를 실측값으로 갱신 (스케일링 기준은 cacheEntry에서 읽으므로 오염 무해)
-                    entry.position = pos;
-                    entry.element = found;
-                    const cachedData = this.questionDataCache.get(found);
-                    if (cachedData) cachedData.position = pos;
-                    window.WITQ.dom.scrollToQuestionPosition(pos, container, behavior);
-                    return;
-                }
-
-                // 못 찾았고 시도 남았으면: 중단 체크 후 앵커 기반(또는 폴백) 갱신 위치로 재점프
-                if (attempt < maxAttempts - 1) {
-                    // 연타 가드
-                    if (token !== this.navToken) {
-                        if (this.debug) console.log('[WITQ] nav abort', { id, reason: 'superseded' });
-                        return;
-                    }
-                    // 사용자 입력으로 중단
-                    if (userInterrupted) {
-                        if (this.debug) console.log('[WITQ] nav abort', { id, reason: 'user-input' });
-                        return;
-                    }
-                    window.WITQ.dom.scrollToQuestionPosition(jumpPos, container, 'auto');
-                }
-            }
-            // 끝까지 못 찾으면 어림 위치에 머문 채 종료 (무음)
-            if (this.debug) console.log('[WITQ] nav give-up', { id, lastJumpPos: jumpPos });
-        } finally {
-            // 모든 종료 경로에서 리스너 해제 보장 (capture 옵션 일치)
-            window.removeEventListener('wheel', onUserInput, { capture: true });
-            window.removeEventListener('touchstart', onUserInput, { capture: true });
-            window.removeEventListener('keydown', onUserInput, { capture: true });
+            // 측정을 먼저 모두 하고 나서 스타일을 쓴다 (레이아웃 반복 계산 방지)
+            const placed = jobs.map(j => {
+                const t = j.turn.getBoundingClientRect();
+                const b = j.bubble.getBoundingClientRect();
+                const w = j.star.offsetWidth || 40;
+                return { star: j.star, left: b.left - t.left - w - 8, top: b.top - t.top };
+            });
+            placed.forEach(p => {
+                p.star.style.left = `${p.left}px`;
+                p.star.style.top = `${p.top}px`;
+            });
         }
-    }
 
-    // --- 마커 DOM 생성/갱신 ---
+        flash(el) {
+            if (!el) return;
+            el.classList.remove('witq-flash');
+            void el.offsetWidth; // 애니메이션 재시작
+            el.classList.add('witq-flash');
+            setTimeout(() => el.classList.remove('witq-flash'), 1600);
+        }
 
-    // id와 현재 라이브 요소(null 가능), 초기 데이터, effHeight(% 분모)를 받아 마커 DOM 생성
-    createMarkerElement(id, initialElement, initialData, effHeight, starJobs) {
-        const marker = document.createElement('div');
-        marker.className = 'question-marker';
+        // ---------------- 이동 ----------------
 
-        const tooltip = document.createElement('div');
-        tooltip.className = 'question-marker-tooltip';
+        async navigate(id) {
+            const token = ++this.navToken;
+            const convKey = this.convKey;
+            let interrupted = false;
+            const onInput = () => { interrupted = true; };
+            const inputEvents = ['wheel', 'touchstart', 'keydown'];
+            const opts = { capture: true, passive: true };
+            const valid = () => !this.destroyed && token === this.navToken && !interrupted && convKey === this.convKey;
 
-        // 첨부 정보 회색 박스 (기본 숨김)
-        const attachmentBox = document.createElement('div');
-        attachmentBox.className = 'witq-tooltip-attachment';
-        attachmentBox.style.display = 'none';
-
-        // 질문 본문 어두운 박스
-        const mainBox = document.createElement('div');
-        mainBox.className = 'witq-tooltip-main';
-
-        tooltip.appendChild(attachmentBox);
-        tooltip.appendChild(mainBox);
-        marker.appendChild(tooltip);
-
-        let hideTooltipTimer = null;
-
-        const showTooltip = () => {
-            clearTimeout(hideTooltipTimer);
-            const entry = this.markers.get(id);
-            if (!entry) return;
-
-            // 라이브 요소가 있으면 상세 텍스트 시도
-            let displayText = entry.text;
-            if (entry.element && document.body.contains(entry.element)) {
-                const data = this.questionDataCache.get(entry.element);
-                if (data) {
-                    this.ensureDetailedQuestionText(entry.element, data);
-                    if (data.detailedText) displayText = data.detailedText;
-                }
-            }
-
-            const html = this.formatTooltipHtml(displayText);
-            // 첨부 줄("*... 첨부" / "*... attached")은 회색 박스로 분리, 나머지는 본문 박스에.
-            // 접미사가 로케일별(attachmentSuffix)이라 정규식을 동적으로 구성한다.
-            const suffix = chrome.i18n.getMessage('attachmentSuffix').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const attachMatch = html.match(new RegExp('^\\*((?:(?!<br>).)*' + suffix + ')(?:<br>|$)'));
-            if (attachMatch) {
-                attachmentBox.innerHTML = attachMatch[1];
-                attachmentBox.style.display = '';
-            } else {
-                attachmentBox.style.display = 'none';
-            }
-            const mainHtml = attachMatch ? html.slice(attachMatch[0].length) : html;
-            mainBox.innerHTML = mainHtml;
-            mainBox.style.display = mainHtml ? '' : 'none';
-            tooltip.style.visibility = 'visible';
-            tooltip.style.opacity = '0';
-
-            const rect = tooltip.getBoundingClientRect();
-            const viewportHeight = window.innerHeight;
-            const topThreshold = 60;
-
-            if (rect.top < topThreshold) {
-                tooltip.style.top = '0px';
-                tooltip.style.transform = 'translateY(0)';
-            } else if (rect.bottom > viewportHeight - 10) {
-                tooltip.style.top = 'auto';
-                tooltip.style.bottom = '0px';
-                tooltip.style.transform = 'translateY(0)';
-            } else {
-                tooltip.style.top = '50%';
-                tooltip.style.bottom = 'auto';
-                tooltip.style.transform = 'translateY(-50%)';
-            }
-            tooltip.style.opacity = '1';
-        };
-
-        const hideTooltip = () => {
-            hideTooltipTimer = setTimeout(() => {
-                tooltip.style.opacity = '0';
-                tooltip.style.visibility = 'hidden';
-            }, 200);
-        };
-
-        marker.addEventListener('mouseenter', showTooltip);
-        marker.addEventListener('mouseleave', hideTooltip);
-        tooltip.addEventListener('mouseenter', () => clearTimeout(hideTooltipTimer));
-        tooltip.addEventListener('mouseleave', hideTooltip);
-
-        marker.addEventListener('click', () => {
-            this.navigateToQuestion(id);
-        });
-
-        marker.addEventListener('contextmenu', async (e) => {
-            e.preventDefault();
-            const entry = this.markers.get(id);
-            if (!entry) return;
-
+            // 클릭 자체로 생기는 입력 이벤트는 무시하도록 다음 틱부터 감지
+            setTimeout(() => inputEvents.forEach(t => window.addEventListener(t, onInput, opts)), 0);
             try {
-                const convKey = window.WITQ.storage.getConversationKey();
-                const currentFavorites = await window.WITQ.storage.getFavorites();
-                const isFavorite = currentFavorites.some(fav => fav.id === id && fav.convKey === convKey);
-                const updatedFavorites = isFavorite
-                    ? currentFavorites.filter(fav => !(fav.id === id && fav.convKey === convKey))
-                    : [...currentFavorites, { id, text: entry.text, position: entry.position, convKey }];
+                let lastPx = null;
+                for (let attempt = 0; attempt < 15; attempt++) {
+                    this.refreshNow();
+                    const container = this.container;
+                    if (!container) return false;
+                    const it = this.items.get(id);
 
-                chrome.storage.local.set({ favorites: updatedFavorites });
-                this.favorites = updatedFavorites;
-                this.rebuildFavoriteIds();
-                this.scheduleUpdate(true, 60);
-            } catch (err) {
-                // 확장 재로드로 컨텍스트가 죽은 고아 인스턴스: 스스로 정리하고 침묵
-                // (에러 패널에 unhandled rejection이 쌓이는 것 방지)
-                if (!chrome.runtime || !chrome.runtime.id) this.destroy();
-            }
-        });
-
-        // 초기 위치/상태 설정 (분모는 호출부에서 전달한 effHeight 사용)
-        if (initialData) {
-            this.updateMarkerElement(marker, initialElement, initialData, effHeight, starJobs);
-        }
-        return marker;
-    }
-
-    // 별표를 래퍼 내에서 질문 버블 좌측에 맞게 배치한다.
-    // append 이후 호출해야 offsetWidth를 올바르게 측정할 수 있다.
-    positionFavoriteStar(star, questionWrapper, questionEl) {
-        const wRect = questionWrapper.getBoundingClientRect();
-        const qRect = questionEl.getBoundingClientRect();
-        // offsetWidth가 아직 0이면 font-size 기준 폴백 사용
-        const starWidth = star.offsetWidth || 64;
-        // 별의 우측 끝이 질문 버블 좌측 가장자리에서 8px 왼쪽에 오도록 배치.
-        // 래퍼=질문 요소면 음수가 되어 박스 왼쪽 바깥에 나간다
-        // (0으로 클램프하면 별이 질문 텍스트를 가려서 클램프하지 않음).
-        const left = qRect.left - wRect.left - starWidth - 8;
-        const top = qRect.top - wRect.top;
-        star.style.left = `${left}px`;
-        star.style.top = `${top}px`;
-    }
-
-    updateMarkerElement(marker, questionEl, data, totalHeight, starJobs) {
-        const isFavorite = this.favoriteIds.has(data.id);
-        marker.classList.toggle('favorite', isFavorite);
-
-        // 즐겨찾기 별표는 DOM에 있는 요소에만 붙임 (가상화로 unmount된 경우 skip)
-        if (questionEl && document.body.contains(questionEl)) {
-            const questionWrapper = this.getQuestionWrapper(questionEl);
-            const existingStar = questionWrapper ? questionWrapper.querySelector('.witq-favorite-star') : null;
-
-            if (isFavorite) {
-                if (questionWrapper) {
-                    // 별표는 absolute 포지셔닝: 래퍼가 containing block이 아니면
-                    // 먼 조상 기준으로 배치돼 페이지 상단에 겹쳐 쌓인다.
-                    // 사이트 DOM 변경으로 CSS 규칙이 빗나가도 인라인으로 보정.
-                    if (window.getComputedStyle(questionWrapper).position === 'static') {
-                        questionWrapper.style.position = 'relative';
+                    if (it && it.live && it.turnEl && it.turnEl.isConnected) {
+                        const pos = W.dom.positionIn(it.turnEl, container);
+                        const near = Math.abs(pos - container.scrollTop) < container.clientHeight * 2;
+                        const behavior = attempt === 0 && near ? 'smooth' : 'auto';
+                        W.dom.scrollTo(container, pos - site.scrollOffset, behavior);
+                        if (behavior === 'smooth') await W.dom.waitForScrollEnd(container);
+                        // 가상화 사이트는 이동 중/직후 주변이 다시 그려지며 위치가 밀릴 수 있어 최대 2번 보정
+                        for (let i = 0; i < 2; i++) {
+                            await W.dom.waitForSettle(150, 600);
+                            if (!valid() || !it.turnEl || !it.turnEl.isConnected) break;
+                            const again = W.dom.positionIn(it.turnEl, container) - site.scrollOffset;
+                            const maxTop = container.scrollHeight - container.clientHeight;
+                            const target = Math.min(Math.max(0, again), maxTop);
+                            if (Math.abs(target - container.scrollTop) <= 6) break;
+                            W.dom.scrollTo(container, target, 'auto');
+                        }
+                        this.flash(it.bubbleEl || it.turnEl);
+                        this.log('nav done', { id, attempt });
+                        return true;
                     }
-                    const star = existingStar || (() => {
-                        const s = document.createElement('div');
-                        s.className = 'witq-favorite-star';
-                        s.textContent = '★';
-                        questionWrapper.appendChild(s);
-                        return s;
-                    })();
-                    // 새로 추가한 경우도 기존 별도 매번 위치 갱신 (리사이즈/레이아웃 변화 대응)
-                    if (starJobs) {
-                        starJobs.push({ star, wrapper: questionWrapper, el: questionEl });
-                    } else {
-                        // 단건 호출 폴백 (배치 컨텍스트가 없을 때)
-                        this.positionFavoriteStar(star, questionWrapper, questionEl);
+
+                    // 화면에 없음: 어림 위치로 점프해서 렌더를 유도
+                    const { ordered, fractions } = this.layout;
+                    const idx = ordered.findIndex(o => o.id === id);
+                    if (idx < 0) return false;
+                    let px = (it && it.pos !== null && it.pos !== undefined)
+                        ? it.pos
+                        : W.layout.fractionToPixel(fractions[idx], this.layout);
+                    if (px === null) px = 0; // 아직 안 불러온 위쪽 → 맨 위로 가서 예전 대화를 불러오게 한다
+                    px -= site.scrollOffset;
+                    if (lastPx !== null && Math.abs(px - lastPx) < 5) {
+                        // 같은 자리만 맴돌면 목표 방향으로 한 화면씩 이동
+                        const liveIdx = ordered.map((o, i) => (o.live ? i : -1)).filter(i => i >= 0);
+                        const up = liveIdx.length > 0 && idx < liveIdx[0];
+                        px = container.scrollTop + (up ? -0.8 : 0.8) * container.clientHeight;
                     }
+                    lastPx = px;
+                    this.log('nav jump', { id, attempt, px: Math.round(px) });
+                    W.dom.scrollTo(container, px, 'auto');
+                    await W.dom.waitForSettle(180, 1000);
+                    if (!valid()) return false;
                 }
-            } else if (existingStar) {
-                existingStar.remove();
+                this.log('nav give-up', { id });
+                return false;
+            } finally {
+                setTimeout(() => inputEvents.forEach(t => window.removeEventListener(t, onInput, opts)), 0);
             }
         }
 
-        const clamped = Math.min(Math.max(data.position, 0), totalHeight);
-        marker.style.top = `${(clamped / totalHeight) * 100}%`;
-    }
+        // ---------------- 즐겨찾기 ----------------
 
-    // --- 이벤트 / 상태 관리 ---
+        rebuildFavoriteIds() {
+            this.favoriteIds = new Set(
+                this.favorites.filter(f => f && f.convKey === this.convKey).map(f => f.id)
+            );
+        }
 
-    setupEventListeners() {
-        this.onRuntimeMessage = (message, sender, sendResponse) => {
-            if (message.type === 'scrollToQuestion') {
-                // id가 있으면 2단계 이동(가상화 대응), 없으면 단일 스크롤 폴백(하위호환)
-                if (message.id) {
-                    this.navigateToQuestion(message.id);
-                } else {
-                    window.WITQ.dom.scrollToQuestionPosition(message.position);
-                }
-                sendResponse({ status: 'scrolling' });
-            } else if (message.type === 'getQuestions') {
-                this.scheduleUpdate(true, 0);
-                sendResponse({ status: 'processing' });
-            }
-            return true;
-        };
-        chrome.runtime.onMessage.addListener(this.onRuntimeMessage);
-
-        this.onStorageChanged = (changes, namespace) => {
-            if (namespace === 'local' && changes.favorites) {
-                this.favorites = changes.favorites.newValue || [];
+        async toggleFavorite(id) {
+            try {
+                const entry = this.layout.ordered.find(o => o.id === id);
+                const favorites = await W.storage.getFavorites();
+                const exists = favorites.some(f => f.id === id && f.convKey === this.convKey);
+                const next = exists
+                    ? favorites.filter(f => !(f.id === id && f.convKey === this.convKey))
+                    : [...favorites, { id, convKey: this.convKey, text: entry ? this.previewText(entry) : '' }];
+                this.favorites = next;
                 this.rebuildFavoriteIds();
-                this.scheduleUpdate(true, 0);
+                this.scheduleRefresh(0);
+                await W.storage.setFavorites(next);
+            } catch (e) {
+                if (!W.storage.contextAlive()) this.destroy();
             }
-        };
-        chrome.storage.onChanged.addListener(this.onStorageChanged);
+        }
 
-        this.onWindowResize = () => {
-            clearTimeout(this.resizeDebounceTimer);
-            this.resizeDebounceTimer = setTimeout(() => {
-                // 크기 불변(포커스 전환 등)이면 무동작
-                if (window.innerWidth === this.lastViewport.w &&
-                    window.innerHeight === this.lastViewport.h) {
-                    return;
-                }
-                this.lastViewport = { w: window.innerWidth, h: window.innerHeight };
-                this.startObserver();           // 컨테이너가 바뀌었을 수 있으니 옵저버 재부착
-                this.scheduleUpdate(true, 0);   // 강제 업데이트 → 렌더된 마커 실측 재측정 + 전체 재배치
-            }, 1000);
-        };
-        window.addEventListener('resize', this.onWindowResize);
-
-        // SPA 네비게이션 지원 (popstate + pushState/replaceState 감지 공용 핸들러)
-        this.onNavChange = () => {
-            this.startObserver();
-            this.scheduleWarmupUpdates();
-            this.scheduleUpdate(true, 0);
-        };
-        window.addEventListener('popstate', this.onNavChange);
-        window.addEventListener('witq:urlchange', this.onNavChange);
-    }
-
-    startObserver() {
-        const container = window.WITQ.dom.getScrollContainer();
-        if (container === window) {
-            if (this.observerRetryCount < 5) {
-                if (!this.observerRetryTimer) {
-                    this.observerRetryCount++;
-                    this.observerRetryTimer = setTimeout(() => {
-                        this.observerRetryTimer = null;
-                        this.startObserver();
-                    }, 500);
-                }
-                return;
+        // v1.8 이하 즐겨찾기는 질문 텍스트 해시를 ID로 썼다. 텍스트가 같은 질문을 찾아 새 ID로 옮긴다.
+        maybeMigrateFavorites(ordered) {
+            if (this.migratedConv === this.convKey || ordered.length === 0) return;
+            if (this.apiState !== 'done') return;
+            this.migratedConv = this.convKey;
+            const ids = new Set(ordered.map(o => o.id));
+            let changed = false;
+            const next = this.favorites.map(f => {
+                if (!f || f.convKey !== this.convKey || ids.has(f.id)) return f;
+                const favText = normalizeForMatch(f.text);
+                if (!favText) return f;
+                const match = ordered.find(o => {
+                    const t = normalizeForMatch(o.text);
+                    if (!t) return false;
+                    const n = Math.min(80, favText.length, t.length);
+                    return t === favText || (n >= 20 && t.slice(0, n) === favText.slice(0, n));
+                });
+                if (!match) return f;
+                changed = true;
+                return Object.assign({}, f, { id: match.id });
+            });
+            if (changed) {
+                this.log('favorites migrated');
+                this.favorites = next;
+                this.rebuildFavoriteIds();
+                W.storage.setFavorites(next).catch(() => {});
             }
-            // 재시도 상한 도달: document.body 폴백 옵저버 부착
-            if (this.observerTarget === document.body) return;
-            if (this.observer) this.observer.disconnect();
-            this.observerTarget = document.body;
-            this.observer = new MutationObserver(() => {
-                this.scheduleUpdate(false, 120);
+        }
+
+        // ---------------- 팝업 ----------------
+
+        popupQuestions() {
+            return this.layout.ordered.map(o => ({ id: o.id, text: this.previewText(o) }));
+        }
+
+        sendPopupUpdate() {
+            const questions = this.popupQuestions();
+            const signature = this.convKey + '|' + questions.map(q => q.id).join(',');
+            if (signature === this.popupSignature) return;
+            this.popupSignature = signature;
+            try {
+                chrome.runtime.sendMessage({ type: 'questionList', questions, convKey: this.convKey }, () => {
+                    void chrome.runtime.lastError; // 팝업이 닫혀 있으면 받는 쪽이 없다
+                });
+            } catch (e) {}
+        }
+
+        // ---------------- 이벤트 ----------------
+
+        setupListeners() {
+            this.onMessage = (message, sender, sendResponse) => {
+                if (!message) return;
+                if (message.type === 'getQuestions') {
+                    this.refreshNow();
+                    sendResponse({ questions: this.popupQuestions(), convKey: this.convKey });
+                } else if (message.type === 'scrollToQuestion' && message.id) {
+                    this.navigate(message.id);
+                    sendResponse({ status: 'ok' });
+                }
+            };
+            chrome.runtime.onMessage.addListener(this.onMessage);
+
+            this.onStorage = (changes, area) => {
+                if (area !== 'local') return;
+                if (changes.favorites) {
+                    this.favorites = changes.favorites.newValue || [];
+                    this.rebuildFavoriteIds();
+                    this.scheduleRefresh(0);
+                }
+                if (changes.witqDebug) this.debug = !!changes.witqDebug.newValue;
+            };
+            chrome.storage.onChanged.addListener(this.onStorage);
+
+            this.observer = new MutationObserver(mutations => {
+                const relevant = mutations.some(m =>
+                    !isOwnNode(m.target) &&
+                    (Array.from(m.addedNodes).some(n => !isOwnNode(n)) ||
+                     Array.from(m.removedNodes).some(n => !isOwnNode(n))));
+                if (relevant) this.scheduleRefresh(250);
             });
             this.observer.observe(document.body, { childList: true, subtree: true });
-            // 부착 전 렌더된 내용이 반영되도록 부착 직후 1회 강제 갱신
-            this.scheduleUpdate(true, 0);
-            return;
+
+            this.onScroll = () => this.scheduleRefresh(120);
+            document.addEventListener('scroll', this.onScroll, { capture: true, passive: true });
+            this.onResize = () => this.scheduleRefresh(150);
+            window.addEventListener('resize', this.onResize);
+
+            // 사이트의 주소 변경(pushState)은 콘텐츠 스크립트에서 직접 가로챌 수 없어 주기적으로 확인한다
+            this.urlTimer = setInterval(() => this.checkConversation(), 400);
+            this.onPopState = () => this.checkConversation();
+            window.addEventListener('popstate', this.onPopState);
         }
 
-        // 정상 스크롤 컨테이너: 카운터 초기화 후 옵저버 부착
-        this.observerRetryCount = 0;
-        const observerTarget = container;
-        if (!observerTarget) return;
-
-        if (this.observer && this.observerTarget === observerTarget) return;
-        if (this.observer) this.observer.disconnect();
-        this.observerTarget = observerTarget;
-
-        this.observer = new MutationObserver((mutations) => {
-            const hasChange = mutations.some(m => m.type === 'childList' && (m.addedNodes.length || m.removedNodes.length));
-
-            if (hasChange || this.lastUrl !== location.href) {
-                this.scheduleUpdate(false, 120);
-            }
-        });
-
-        this.observer.observe(observerTarget, {
-            childList: true,
-            subtree: true
-        });
-        // 부착 전 렌더된 내용이 반영되도록 부착 직후 1회 강제 갱신
-        this.scheduleUpdate(true, 0);
+        destroy() {
+            if (this.destroyed) return;
+            this.destroyed = true;
+            this.navToken++;
+            clearTimeout(this.refreshTimer);
+            clearTimeout(this.apiRefetchTimer);
+            clearTimeout(this.tooltipHideTimer);
+            clearInterval(this.urlTimer);
+            if (this.observer) this.observer.disconnect();
+            window.removeEventListener('witq:teardown', this.onTeardown);
+            if (this.onScroll) document.removeEventListener('scroll', this.onScroll, { capture: true });
+            if (this.onResize) window.removeEventListener('resize', this.onResize);
+            if (this.onPopState) window.removeEventListener('popstate', this.onPopState);
+            try { if (this.onMessage) chrome.runtime.onMessage.removeListener(this.onMessage); } catch (e) {}
+            try { if (this.onStorage) chrome.storage.onChanged.removeListener(this.onStorage); } catch (e) {}
+            if (this.bar) this.bar.remove();
+            if (this.tooltip) this.tooltip.remove();
+            document.querySelectorAll('.witq-star').forEach(el => el.remove());
+            if (window.__witq === this) delete window.__witq;
+        }
     }
-}
 
-// SPA URL 변경 훅 (pushState / replaceState 감지)
-if (!window.__WITQ_HISTORY_HOOKED__) {
-    window.__WITQ_HISTORY_HOOKED__ = true;
-    const originalPushState = history.pushState;
-    const originalReplaceState = history.replaceState;
-    const emitUrlChange = () => window.dispatchEvent(new Event('witq:urlchange'));
-
-    history.pushState = function(...args) {
-        const result = originalPushState.apply(this, args);
-        emitUrlChange();
-        return result;
-    };
-
-    history.replaceState = function(...args) {
-        const result = originalReplaceState.apply(this, args);
-        emitUrlChange();
-        return result;
-    };
-}
-
-// 안전한 지연 초기화. 디버그 핸들(__witqMM)은 witqDebug 켜짐일 때만 initialize에서 노출
-if (document.readyState === 'complete') {
-    new MarkerManager();
-} else {
-    window.addEventListener('load', () => { new MarkerManager(); });
-}
+    const start = () => new Controller();
+    if (document.body) start();
+    else window.addEventListener('DOMContentLoaded', start, { once: true });
+})();

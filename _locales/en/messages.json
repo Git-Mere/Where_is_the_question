@@ -4,7 +4,7 @@
         "description": "The name of the extension."
     },
     "extDescription": {
-        "message": "Finding my questions in ChatGPT, Gemini, Claude, Grok",
+        "message": "Finding my questions in ChatGPT, Gemini, and Claude",
         "description": "The description of the extension."
     },
     "extDefaultTitle": {
@@ -24,12 +24,8 @@
         "description": "First line of the message shown when no questions are found."
     },
     "emptyMessageLine2": {
-        "message": "Ask a question on a ChatGPT, Gemini, Claude, or Grok page, and it will appear here.",
+        "message": "Ask a question on a ChatGPT, Gemini, or Claude page, and it will appear here.",
         "description": "Second line of the message shown when no questions are found."
-    },
-    "contentScriptNotAvailable": {
-        "message": "Content script not available. Showing empty message.",
-        "description": "Error message for developers in the console."
     },
     "favoritesHeader": {
         "message": "Favorites",
@@ -38,10 +34,6 @@
     "questionsHeader": {
         "message": "All Questions",
         "description": "Header for the full question list section in the popup."
-    },
-    "scanning": {
-        "message": "Scanning...",
-        "description": "Badge shown in the page while scanning a long conversation."
     },
     "imageAttachment": {
         "message": "Image attachment",

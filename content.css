@@ -1,105 +1,109 @@
-/* 오른쪽 스크롤바 옆에 붙는 얇은 오버레이 */
-#question-scrollbar-container {
+/* 대화 스크롤 영역 오른쪽 끝에 붙는 마커 막대 (위치/높이는 JS가 스크롤 영역에 맞춤) */
+#witq-bar {
     position: fixed;
     top: 0;
     right: 0;
-    width: 14px;              /* 컨테이너 폭 증가 */
+    width: 14px;
     height: 100%;
-    z-index: 9999;
-    pointer-events: none;     /* 기본적으로는 뒤에 클릭 통과 */
+    z-index: 2147483000;
+    pointer-events: none;
 }
 
-/* 개별 질문 마커(= 파란 바) */
-.question-marker {
+/* 질문 하나 = 파란 마커 */
+.witq-marker {
     position: absolute;
     left: 0;
-    right: 0;
-    margin: 0 auto;          /* 가운데 정렬 */
-    width: 100%;             /* 컨테이너 폭 전체 */
-    height: 5px;             /* 마커 두께 증가 */
-    background-color: rgba(0, 162, 255, 0.8);
+    width: 100%;
+    height: 5px;
     border-radius: 2px;
-    pointer-events: all;     /* 마커만 클릭 가능 */
+    background-color: rgba(0, 162, 255, 0.8);
+    pointer-events: auto;
     cursor: pointer;
-    transition: background-color 0.2s;
+    transition: background-color 0.15s, transform 0.15s;
 }
 
-.question-marker:hover {
+.witq-marker:hover {
     background-color: rgba(0, 102, 255, 1);
+    transform: scaleY(1.6);
 }
 
-/* 즐겨찾기된 질문 마커 */
-.question-marker.favorite {
-    background-color: rgba(255, 238, 0, 0.9);
+/* 지금 화면에 보이는 질문 */
+.witq-marker.in-view {
+    background-color: rgba(0, 102, 255, 1);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
 }
 
-.question-marker.favorite:hover {
-    background-color: rgba(255, 225, 0, 1);
+.witq-marker.favorite {
+    background-color: rgba(255, 210, 0, 0.95);
 }
 
-/* 마커 호버 시 나타나는 툴팁 래퍼 (위치/가시성만 담당, 배경 없음) */
-.question-marker-tooltip {
-    position: absolute;
-    top: 50%;
-    right: 20px; /* 마커 오른쪽에 표시 */
-    transform: translateY(-50%);
-    width: 200px; /* 너비 200px */
-    z-index: 10000;
+.witq-marker.favorite:hover,
+.witq-marker.favorite.in-view {
+    background-color: rgba(255, 190, 0, 1);
+}
+
+/* 마커 미리보기 */
+#witq-tooltip {
+    position: fixed;
+    top: 0;
+    right: 24px;
+    width: 240px;
+    z-index: 2147483001;
+    pointer-events: none;
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.2s, visibility 0.2s;
+    transition: opacity 0.12s;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-/* 첨부파일 정보를 표시하는 회색 박스 (본문 박스 위에 표시) */
+#witq-tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* 첨부파일 줄 (회색) */
 .witq-tooltip-attachment {
-    background-color: #6b6b6b;
-    color: #f1f1f1;
+    margin-bottom: 4px;
     padding: 6px 8px;
     border-radius: 4px;
+    background-color: #6b6b6b;
+    color: #f1f1f1;
     font-size: 12px;
     line-height: 1.4;
-    margin-bottom: 4px;
     word-break: break-all;
 }
 
-/* 질문 본문을 표시하는 어두운 박스 */
+/* 질문 본문 (어두운 박스, 최대 5줄 정도) */
 .witq-tooltip-main {
+    max-height: 100px;
+    overflow: hidden;
     padding: 8px;
+    border-radius: 4px;
     background-color: #2c2c2c;
     color: #f1f1f1;
-    border-radius: 4px;
     font-size: 12px;
     line-height: 1.4;
-    max-height: 100px; /* 최대 높이 100px */
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    word-break: break-word;
 }
 
-/* 즐겨찾기된 질문의 컨테이너 (요소 태그 한정 금지: ChatGPT가 div→article로 바뀜) */
-[data-testid^="conversation-turn"], .user-query, .user-query-container, .query-with-attachments-container {
-    position: relative;
-}
-
-/* 전체 스캔 중 표시 배지 */
-#witq-scan-indicator {
-    position: fixed;
-    top: 8px;
-    right: 20px;
-    padding: 3px 8px;
-    background-color: rgba(0, 0, 0, 0.55);
-    color: rgba(255, 255, 255, 0.85);
-    font-size: 11px;
-    border-radius: 4px;
-    z-index: 10001;
-    pointer-events: none;
-}
-
-/* 즐겨찾기 별표 (top/left는 JS positionFavoriteStar에서 동적 계산) */
-.witq-favorite-star {
+/* 즐겨찾기한 질문 옆 별표 (위치는 JS가 질문 말풍선 왼쪽에 맞춤) */
+.witq-star {
     position: absolute;
-    font-size: 64px;
-    color: rgba(255, 238, 0, 0.9);
     z-index: 10;
+    font-size: 40px;
+    line-height: 1;
+    color: rgba(255, 210, 0, 0.95);
+    text-shadow: 0 0 8px rgba(0, 0, 0, 0.35);
     pointer-events: none;
-    text-shadow: 0 0 10px rgba(0,0,0,0.5);
+}
+
+/* 마커로 이동한 질문을 잠깐 강조 */
+@keyframes witq-flash {
+    0% { box-shadow: 0 0 0 3px rgba(0, 140, 255, 0.85); }
+    100% { box-shadow: 0 0 0 3px rgba(0, 140, 255, 0); }
+}
+
+.witq-flash {
+    animation: witq-flash 1.5s ease-out;
 }

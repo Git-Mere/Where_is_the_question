@@ -3,7 +3,7 @@
   "default_locale": "en",
   "name": "__MSG_extName__",
   "description": "__MSG_extDescription__",
-  "version": "1.8",
+  "version": "1.9",
   "permissions": [
     "storage"
   ],
@@ -12,7 +12,6 @@
     "48": "images/icon48.png",
     "128": "images/icon128.png"
   },
-
   "action": {
     "default_title": "__MSG_extDefaultTitle__",
     "default_icon": {
@@ -21,19 +20,19 @@
     },
     "default_popup": "popup.html"
   },
-
   "content_scripts": [
     {
       "matches": [
         "https://chat.openai.com/*",
         "https://chatgpt.com/*",
         "https://gemini.google.com/*",
-        "https://claude.ai/*",
-        "https://grok.com/*"
+        "https://claude.ai/*"
       ],
       "js": [
         "src/modules/text.js",
-        "src/modules/config.js",
+        "src/modules/parsers.js",
+        "src/modules/layout.js",
+        "src/modules/sites.js",
         "src/modules/dom.js",
         "src/modules/storage.js",
         "content.js"

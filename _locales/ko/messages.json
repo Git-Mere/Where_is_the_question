@@ -4,7 +4,7 @@
         "description": "확장 프로그램의 이름입니다."
     },
     "extDescription": {
-        "message": "ChatGPT, Gemini, Claude, Grok에서 내 질문을 쉽게 찾아보세요",
+        "message": "ChatGPT, Gemini, Claude에서 내 질문을 쉽게 찾아보세요",
         "description": "확장 프로그램의 설명입니다."
     },
     "extDefaultTitle": {
@@ -24,12 +24,8 @@
         "description": "질문을 찾을 수 없을 때 표시되는 메시지의 첫 번째 줄입니다."
     },
     "emptyMessageLine2": {
-        "message": "ChatGPT, Gemini, Claude, Grok 페이지에서 질문을 하면 여기에 표시됩니다.",
+        "message": "ChatGPT, Gemini, Claude 페이지에서 질문을 하면 여기에 표시됩니다.",
         "description": "질문을 찾을 수 없을 때 표시되는 메시지의 두 번째 줄입니다."
-    },
-    "contentScriptNotAvailable": {
-        "message": "콘텐츠 스크립트를 사용할 수 없습니다. 빈 메시지를 표시합니다.",
-        "description": "콘솔에 표시되는 개발자용 오류 메시지입니다."
     },
     "favoritesHeader": {
         "message": "즐겨찾기",
@@ -38,10 +34,6 @@
     "questionsHeader": {
         "message": "전체 질문",
         "description": "팝업의 전체 질문 목록 섹션 헤더입니다."
-    },
-    "scanning": {
-        "message": "스캔 중...",
-        "description": "긴 대화를 스캔하는 동안 페이지에 표시되는 배지입니다."
     },
     "imageAttachment": {
         "message": "이미지 첨부",

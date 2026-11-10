@@ -1,146 +1,100 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // --- Internationalization ---
-    const i18n_elements = document.querySelectorAll('[data-i18n-content]');
-    i18n_elements.forEach(el => {
+    document.querySelectorAll('[data-i18n-content]').forEach(el => {
         el.textContent = chrome.i18n.getMessage(el.getAttribute('data-i18n-content'));
     });
 
-    // --- DOM Elements ---
     const questionList = document.getElementById('question-list');
     const favoritesList = document.getElementById('favorites-list');
     const favoritesSection = document.getElementById('favorites-section');
     const emptyMessage = document.getElementById('empty-message');
 
-    let questionsCache = [];
-    let favoritesCache = [];
-    let currentConvKey = null;
+    let questions = [];
+    let favorites = [];
+    let convKey = null;
+    let tabId = null;
 
-    // --- Storage API Helpers ---
-    const getFavorites = () => {
-        return new Promise(resolve => {
-            chrome.storage.local.get({ favorites: [] }, (result) => {
-                resolve(result.favorites);
-            });
-        });
+    const getFavorites = async () => {
+        const result = await chrome.storage.local.get({ favorites: [] });
+        return Array.isArray(result.favorites) ? result.favorites : [];
     };
 
-    const saveFavorites = (favorites) => {
-        return new Promise(resolve => {
-            chrome.storage.local.set({ favorites }, () => {
-                resolve();
-            });
-        });
-    };
+    const isFavorite = (id) => favorites.some(f => f.id === id && f.convKey === convKey);
 
-    // --- UI Helpers ---
-    function createQuestionListItem(item, isFavorite) {
-        const cleanText = item.text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    async function toggleFavorite(item) {
+        favorites = await getFavorites();
+        favorites = isFavorite(item.id)
+            ? favorites.filter(f => !(f.id === item.id && f.convKey === convKey))
+            : [...favorites, { id: item.id, convKey, text: item.text }];
+        await chrome.storage.local.set({ favorites });
+        render();
+    }
 
+    function goTo(id) {
+        if (tabId !== null) chrome.tabs.sendMessage(tabId, { type: 'scrollToQuestion', id }, () => void chrome.runtime.lastError);
+        window.close();
+    }
+
+    function createItem(item) {
         const li = document.createElement('li');
         li.className = 'question-item';
-        li.dataset.questionId = item.id;
 
-        const questionText = document.createElement('span');
-        questionText.className = 'question-text';
-        questionText.textContent = cleanText;
-        questionText.title = cleanText;
-        questionText.addEventListener('click', () => {
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                const activeTab = tabs[0];
-                if (activeTab && activeTab.id) {
-                    chrome.tabs.sendMessage(activeTab.id, {
-                        type: 'scrollToQuestion',
-                        position: item.position,
-                        id: item.id
-                    });
-                }
-            });
-            window.close();
-        });
+        const text = document.createElement('span');
+        text.className = 'question-text';
+        text.textContent = item.text;
+        text.title = item.text;
+        text.addEventListener('click', () => goTo(item.id));
 
         const star = document.createElement('span');
         star.className = 'favorite-star';
-        star.textContent = isFavorite ? '★' : '☆';
-        star.addEventListener('click', async () => {
-            if (isFavorite) {
-                // 즐겨찾기 섹션 항목은 자체 convKey를, 질문 목록 항목은 현재 대화 키로 폴백
-                const targetConvKey = item.convKey || currentConvKey;
-                favoritesCache = favoritesCache.filter(
-                    fav => !(fav.id === item.id && fav.convKey === targetConvKey)
-                );
-            } else {
-                favoritesCache.push({ id: item.id, text: item.text, position: item.position, convKey: currentConvKey });
-            }
-            await saveFavorites(favoritesCache);
-            updatePopupUI();
-        });
+        star.textContent = isFavorite(item.id) ? '★' : '☆';
+        star.addEventListener('click', () => toggleFavorite(item));
 
-        li.appendChild(questionText);
-        li.appendChild(star);
+        li.append(text, star);
         return li;
     }
 
-    // --- UI Update ---
-    function updatePopupUI() {
-        questionList.innerHTML = '';
-        favoritesList.innerHTML = '';
+    function render() {
+        questionList.replaceChildren();
+        favoritesList.replaceChildren();
 
-        // 현재 페이지(대화) 기준으로 즐겨찾기를 필터링
-        const pageFavorites = currentConvKey
-            ? favoritesCache.filter(fav => fav.convKey === currentConvKey)
-            : [];
+        // 즐겨찾기 섹션: 현재 대화의 즐겨찾기 중 지금 목록에 있는 것만 (목록 순서대로)
+        const favs = questions.filter(q => isFavorite(q.id));
+        favoritesSection.style.display = favs.length > 0 ? 'block' : 'none';
+        favs.forEach(q => favoritesList.appendChild(createItem(q)));
 
-        const hasFavorites = pageFavorites.length > 0;
-        favoritesSection.style.display = hasFavorites ? 'block' : 'none';
-
-        if (hasFavorites) {
-            pageFavorites.forEach(fav => {
-                favoritesList.appendChild(createQuestionListItem(fav, true));
-            });
-        }
-
-        if (!questionsCache || questionsCache.length === 0) {
-            emptyMessage.style.display = 'block';
-            questionList.style.display = 'none';
-        } else {
-            emptyMessage.style.display = 'none';
-            questionList.style.display = 'block';
-
-            questionsCache.forEach(question => {
-                const isFavorite = pageFavorites.some(fav => fav.id === question.id);
-                questionList.appendChild(createQuestionListItem(question, isFavorite));
-            });
-        }
+        const empty = questions.length === 0;
+        emptyMessage.style.display = empty ? 'block' : 'none';
+        questionList.style.display = empty ? 'none' : 'block';
+        questions.forEach(q => questionList.appendChild(createItem(q)));
     }
 
-    // --- Event Listeners & Initial Load ---
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (message.type === 'questionList') {
-            questionsCache = message.questions;
-            currentConvKey = message.convKey || null;
-            updatePopupUI();
+    function applyList(message) {
+        questions = Array.isArray(message.questions) ? message.questions : [];
+        convKey = message.convKey || null;
+        render();
+    }
+
+    // 페이지에서 목록이 바뀌면 열려 있는 팝업도 갱신
+    chrome.runtime.onMessage.addListener((message, sender) => {
+        if (message && message.type === 'questionList' && sender.tab && sender.tab.id === tabId) {
+            applyList(message);
         }
     });
 
-    async function initialize() {
-        favoritesCache = await getFavorites();
-
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            const activeTab = tabs[0];
-            if (activeTab && activeTab.id) {
-                chrome.tabs.sendMessage(activeTab.id, { type: 'getQuestions' }, (response) => {
-                    if (chrome.runtime.lastError) {
-                        console.log(chrome.i18n.getMessage('contentScriptNotAvailable'));
-                        questionsCache = [];
-                        updatePopupUI();
-                    }
-                });
-            } else {
-                questionsCache = [];
-                updatePopupUI();
+    (async () => {
+        favorites = await getFavorites();
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || !tab.id) {
+            render();
+            return;
+        }
+        tabId = tab.id;
+        chrome.tabs.sendMessage(tabId, { type: 'getQuestions' }, (response) => {
+            if (chrome.runtime.lastError || !response) {
+                render();
+                return;
             }
+            applyList(response);
         });
-    }
-
-    initialize();
+    })();
 });
