@@ -5,6 +5,16 @@ A Chrome extension that pins your questions as scrollbar markers so you never lo
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![JavaScript](https://img.shields.io/badge/language-JavaScript-yellow.svg)
 
+**[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/where-is-the-question/gnidmiclaanakeggddihdkepihmpkpff)**
+
+## Highlights
+
+- Published on the Chrome Web Store; marks every question in ChatGPT, Gemini, Claude, and Grok chats beside the scrollbar
+- Narrowed DOM observation from the whole document to the chat's scroll container and cut the update debounce from 1 s to 120 ms, capped at one update per 180 ms
+- Covers virtualized chats that unmount off-screen messages, and jumps to questions the site has not rendered yet
+- Least-privilege permissions: cut from `tabs` to `activeTab` to `storage` only, with content scripts limited to 5 chat domains
+- 31 dependency-free `node:test` cases for the text utilities
+
 ## Features
 
 - **Automatic scrollbar markers** — a blue marker for every question appears beside the scrollbar as soon as you open a conversation, even in long chats where the site only renders part of the page
@@ -40,7 +50,7 @@ Live listing: [Chrome Web Store](https://chromewebstore.google.com/detail/where-
 - **CSS** — positions the marker overlay on top of the native scrollbar track and styles tooltips without leaking into the host page's stylesheet
 - **HTML** — minimal popup shell for rendering the question and favorites lists
 
-Supported AI platforms: ChatGPT, Gemini, Claude.
+Supported AI platforms: ChatGPT, Gemini, Claude, Grok.
 
 ## Getting Started
 
@@ -64,7 +74,7 @@ git clone https://github.com/Git-Mere/Where_is_the_question.git
 
 ### Usage
 
-Open a conversation on ChatGPT, Gemini, or Claude. Markers for every question appear on the scrollbar automatically, and new ones are added as you send questions.
+Open a conversation on ChatGPT, Gemini, Claude, or Grok. Markers for every question appear on the scrollbar automatically, and new ones are added as you send questions.
 
 | Action | Result |
 |--------|--------|
