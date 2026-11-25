@@ -111,7 +111,35 @@
         return deltas.length % 2 ? deltas[mid] : (deltas[mid - 1] + deltas[mid]) / 2;
     }
 
-    const layout = { weightStarts, interpolate, computeLayout, fractionToPixel, medianShift };
+    /**
+     * 화면에 없는 질문을 찾아갈 때 다음 스크롤 위치를 정한다.
+     * 방향(dir)은 "지금 렌더된 질문들보다 목표가 위인지 아래인지"로 정하므로 오래된 위치 기억에 휘둘리지 않는다.
+     *   dir: -1 위로, 1 아래로, 0 모름(어림값 그대로)
+     *   estimate: 어림 위치(px, 이미 여백 반영). null이면 아직 안 불러온 위쪽 → 0
+     *   current/view/maxTop: 현재 scrollTop, 화면 높이, 최대 scrollTop
+     *   lo/hi: 이전 단계에서 "목표가 이보다 아래였던 위치"/"위였던 위치" (없으면 null). 둘 다 있으면 그 사이로 좁힌다(이분 탐색).
+     * 반환: 다음 scrollTop
+     */
+    function nextScrollTarget(opts) {
+        const { dir, current, view, maxTop } = opts;
+        const lo = opts.lo === undefined ? null : opts.lo;
+        const hi = opts.hi === undefined ? null : opts.hi;
+        let target = opts.estimate === null || opts.estimate === undefined ? 0 : opts.estimate;
+        // 어림값이 틀려도 반드시 목표 방향으로 반 화면 이상은 움직인다 (같은 자리 맴돌기 방지)
+        if (dir < 0) target = Math.min(target, current - view * 0.5);
+        if (dir > 0) target = Math.max(target, current + view * 0.5);
+        // 위아래로 한 번씩 지나쳤으면 그 사이 범위 밖으로는 나가지 않는다
+        if (lo !== null && hi !== null && hi > lo) {
+            if (!(target > lo && target < hi)) target = (lo + hi) / 2;
+        } else if (dir >= 0 && lo !== null && target <= lo) {
+            target = lo + view * 0.5;
+        } else if (dir <= 0 && hi !== null && target >= hi) {
+            target = hi - view * 0.5;
+        }
+        return Math.min(Math.max(0, target), Math.max(0, maxTop));
+    }
+
+    const layout = { weightStarts, interpolate, computeLayout, fractionToPixel, medianShift, nextScrollTarget };
 
     root.WITQ = root.WITQ || {};
     root.WITQ.layout = layout;

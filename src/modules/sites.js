@@ -8,6 +8,9 @@
 //                             [{ id, turnEl, bubbleEl, text, attachments: string[], images: number }]
 //   fetchQuestions()          대화 데이터에서 질문 전체 목록 (실패/미지원이면 null)
 //                             [{ id, text, attachments, images, weight }]
+//   fetchDelay                대화를 연 뒤 대화 데이터를 받기 전 기다릴 시간(ms). 사이트가 먼저 불러오게 양보
+//   turnSelector              이동 중 "화면이 안정됐는지" 확인할 때 세는 턴 요소
+//   loadFailed(container)     사이트가 "예전 대화를 못 불러왔다"는 오류를 띄웠는지
 window.WITQ = window.WITQ || {};
 
 (function() {
@@ -38,7 +41,11 @@ window.WITQ = window.WITQ || {};
 
     async function fetchJson(url, options) {
         const res = await fetch(url, Object.assign({ credentials: 'include' }, options || {}));
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+        if (!res.ok) {
+            const err = new Error(`HTTP ${res.status} ${url}`);
+            err.status = res.status;
+            throw err;
+        }
         return res.json();
     }
 
@@ -47,11 +54,19 @@ window.WITQ = window.WITQ || {};
         name: 'chatgpt',
         scrollOffset: 72,
         loadsOlderOnTop: true,
+        fetchDelay: 1500,
+        turnSelector: '[data-turn-key]',
         _token: null,
         _tokenAt: 0,
 
         scrollContainer(sample) {
             return pickContainer('.thread-scroll-container, [role="region"][aria-label][data-app-action-timeline-scroll]', sample);
+        },
+
+        // 긴 대화는 10턴씩 나눠 불러오는데, 실패하면 맨 위에 경고 아이콘 + Retry 버튼이 뜬다
+        // ("Couldn't load earlier messages", 2026-11-24 실측). 문구 대신 아이콘으로 판별(언어 무관).
+        loadFailed(container) {
+            return !!(container && container.querySelector('[role="status"] use[href*="exclamationmark"]'));
         },
 
         liveQuestions() {
@@ -114,6 +129,9 @@ window.WITQ = window.WITQ || {};
         name: 'claude',
         scrollOffset: 16,
         loadsOlderOnTop: false,
+        fetchDelay: 800,
+        turnSelector: '[data-cds="UserMessage"], [data-testid="user-message"]',
+        loadFailed() { return false; },
         _orgId: null,
 
         scrollContainer(sample) {
@@ -160,7 +178,11 @@ window.WITQ = window.WITQ || {};
                 fetchJson(`/api/organizations/${orgId}/chat_conversations/${id}?${query}`);
 
             if (this._orgId) {
-                try { return W.parsers.parseClaudeConversation(await tryOrg(this._orgId)); } catch (e) {}
+                try {
+                    return W.parsers.parseClaudeConversation(await tryOrg(this._orgId));
+                } catch (e) {
+                    if (e && e.status === 429) throw e; // 요청 제한은 content.js가 잠시 멈추도록 전달
+                }
             }
             // 계정이 여러 조직에 속할 수 있어 대화가 있는 조직을 찾는다
             const orgs = await fetchJson('/api/organizations');
@@ -169,7 +191,9 @@ window.WITQ = window.WITQ || {};
                     const json = await tryOrg(org.uuid);
                     this._orgId = org.uuid;
                     return W.parsers.parseClaudeConversation(json);
-                } catch (e) {}
+                } catch (e) {
+                    if (e && e.status === 429) throw e;
+                }
             }
             return null;
         }
@@ -180,6 +204,9 @@ window.WITQ = window.WITQ || {};
         name: 'gemini',
         scrollOffset: 16,
         loadsOlderOnTop: true,
+        fetchDelay: 0,
+        turnSelector: '.conversation-container',
+        loadFailed() { return false; },
 
         scrollContainer(sample) {
             return pickContainer('infinite-scroller.chat-history, [data-test-id="chat-history-container"]', sample);

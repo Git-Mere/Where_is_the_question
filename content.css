@@ -87,6 +87,31 @@
     word-break: break-word;
 }
 
+/* 이동 실패 안내 (예전 대화를 못 불러왔을 때) */
+#witq-toast {
+    position: fixed;
+    top: 12px;
+    right: 24px;
+    max-width: 280px;
+    z-index: 2147483001;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background-color: #2c2c2c;
+    color: #f1f1f1;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 12px;
+    line-height: 1.4;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s;
+}
+
+#witq-toast.visible {
+    opacity: 1;
+    visibility: visible;
+}
+
 /* 즐겨찾기한 질문 옆 별표 (위치는 JS가 질문 말풍선 왼쪽에 맞춤) */
 .witq-star {
     position: absolute;

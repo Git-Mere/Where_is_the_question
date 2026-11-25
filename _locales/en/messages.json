@@ -47,6 +47,10 @@
         "message": "attached",
         "description": "Word appended after attachment file names, e.g. 'report.pdf attached'."
     },
+    "loadOlderFailed": {
+        "message": "The site couldn't load earlier messages. Please try again in a moment.",
+        "description": "Shown when jumping to a question fails because the site could not load older messages."
+    },
     "buyMeCoffee": {
         "message": "☕ Buy me a coffee",
         "description": "Footer link inviting users to support the developer."

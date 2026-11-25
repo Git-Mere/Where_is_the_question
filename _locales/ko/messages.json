@@ -47,6 +47,10 @@
         "message": "첨부",
         "description": "첨부 파일명 뒤에 붙는 단어입니다. 예: '보고서.pdf 첨부'."
     },
+    "loadOlderFailed": {
+        "message": "사이트가 이전 대화를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+        "description": "마커로 이동하려는데 사이트가 예전 메시지를 불러오지 못했을 때 표시되는 안내입니다."
+    },
     "buyMeCoffee": {
         "message": "☕ 커피 한 잔 사주기",
         "description": "개발자를 후원하도록 안내하는 푸터 링크입니다."

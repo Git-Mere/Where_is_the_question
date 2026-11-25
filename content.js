@@ -22,6 +22,45 @@
     const normalizeForMatch = (s) =>
         W.text.stripYouSaid(unescapeHtml(s)).replace(/\s+/g, ' ').trim().toLowerCase();
 
+    // 대화 데이터 캐시. 같은 대화를 다시 열 때마다 전체 대화를 다시 받지 않도록 탭 단위(sessionStorage)로 기억한다.
+    // ChatGPT는 대화 읽기 요청에 계정 단위 제한이 있고, 제한에 걸리면 사이트가 대화/예전 메시지를 못 불러온다
+    // ("A temporary limit is preventing this chat from loading", 2026-11-24 실측). 그래서 요청을 최소화한다.
+    const API_CACHE_TTL_MS = 15 * 60 * 1000;
+    const API_BACKOFF_MS = 10 * 60 * 1000;
+    const API_CACHE_PREFIX = 'witq:conv:';
+    const memoryCache = new Map(); // convKey -> { at, list }
+    let apiBlockedUntil = 0;       // 429를 받으면 한동안 대화 데이터 요청을 아예 안 한다
+
+    function readApiCache(key) {
+        let entry = memoryCache.get(key);
+        if (!entry) {
+            try {
+                const raw = sessionStorage.getItem(API_CACHE_PREFIX + key);
+                if (raw) entry = JSON.parse(raw);
+            } catch (e) {}
+        }
+        if (!entry || !Array.isArray(entry.list) || Date.now() - entry.at > API_CACHE_TTL_MS) return null;
+        memoryCache.set(key, entry);
+        return entry.list;
+    }
+
+    function writeApiCache(key, list) {
+        const entry = { at: Date.now(), list };
+        memoryCache.set(key, entry);
+        try {
+            // 미리보기에는 앞부분만 쓰므로 저장 크기를 줄인다
+            const slim = list.map(q => Object.assign({}, q, { text: (q.text || '').slice(0, 600) }));
+            sessionStorage.setItem(API_CACHE_PREFIX + key, JSON.stringify({ at: entry.at, list: slim }));
+        } catch (e) {}
+    }
+
+    function dropApiCache(key) {
+        memoryCache.delete(key);
+        try { sessionStorage.removeItem(API_CACHE_PREFIX + key); } catch (e) {}
+    }
+
+    const NAV_TIMEOUT_MS = 15000;
+
     const OWN_CLASS_RE = /^witq-/;
     const isOwnNode = (node) => node.nodeType === 1 &&
         (OWN_CLASS_RE.test(node.id || '') || Array.from(node.classList || []).some(c => OWN_CLASS_RE.test(c)));
@@ -34,8 +73,9 @@
             this.apiList = null;          // 대화 데이터에서 받은 질문 목록 (없으면 null)
             this.apiState = 'idle';       // idle | loading | done
             this.apiToken = 0;
+            this.apiTimer = null;
             this.apiRefetchTimer = null;
-            this.apiRefetchedFor = '';
+            this.apiRefetchedAt = 0;
             this.convKey = null;
             this.sawFirstQuestion = false;
             this.lastHeight = 0;
@@ -49,6 +89,7 @@
             this.refreshTimer = null;
             this.popupSignature = '';
             this.tooltipHideTimer = null;
+            this.toastTimer = null;
 
             // 이전 인스턴스(확장 재로드/구버전) 정리. 신호를 먼저 보내고 나서 내 리스너를 단다.
             window.dispatchEvent(new Event('witq:teardown'));
@@ -90,7 +131,7 @@
             this.log('conversation', key);
             this.convKey = key;
             this.resetState();
-            this.fetchApi();
+            this.loadApi();
             this.scheduleRefresh(0);
         }
 
@@ -100,9 +141,11 @@
             this.apiList = null;
             this.apiState = 'idle';
             this.apiToken++;
+            clearTimeout(this.apiTimer);
+            this.apiTimer = null;
             clearTimeout(this.apiRefetchTimer);
             this.apiRefetchTimer = null;
-            this.apiRefetchedFor = '';
+            this.apiRefetchedAt = 0;
             this.sawFirstQuestion = false;
             this.lastHeight = 0;
             this.layout = { ordered: [], fractions: [], loadedStart: 0, height: 1 };
@@ -115,31 +158,62 @@
             this.bar.style.display = 'none';
         }
 
-        async fetchApi() {
+        // 대화 데이터 준비: 캐시가 있으면 바로 쓰고, 없으면 사이트가 먼저 대화를 불러오도록 잠깐 기다렸다가 받는다
+        loadApi() {
+            const cached = readApiCache(this.convKey);
+            if (cached) {
+                this.apiList = cached;
+                this.apiState = 'done';
+                this.log('api list (cache)', cached.length);
+                return;
+            }
+            if (!site.conversationId() || Date.now() < apiBlockedUntil) {
+                this.apiState = 'done';
+                return;
+            }
+            this.apiState = 'loading';
             const token = ++this.apiToken;
+            clearTimeout(this.apiTimer);
+            this.apiTimer = setTimeout(() => {
+                this.apiTimer = null;
+                this.fetchApi(token);
+            }, site.fetchDelay || 0);
+        }
+
+        async fetchApi(token) {
+            if (token === undefined) token = ++this.apiToken;
+            const convKey = this.convKey;
             this.apiState = 'loading';
             let list = null;
             try {
                 list = await site.fetchQuestions();
             } catch (e) {
                 this.log('fetch failed', e);
+                if (e && e.status === 429) apiBlockedUntil = Date.now() + API_BACKOFF_MS;
             }
-            if (this.destroyed || token !== this.apiToken) return;
-            this.apiList = Array.isArray(list) ? list : null;
+            if (this.destroyed || token !== this.apiToken || convKey !== this.convKey) return;
+            if (Array.isArray(list)) {
+                this.apiList = list;
+                writeApiCache(convKey, list);
+            } else if (!this.apiList) {
+                this.apiList = null;
+            }
             this.apiState = 'done';
             this.log('api list', this.apiList ? this.apiList.length : null);
             this.scheduleRefresh(0);
         }
 
-        // 화면에 대화 데이터에 없는 새 질문이 보이면(방금 보낸 질문 등) 잠시 뒤 한 번 다시 받는다
-        scheduleRefetch(unknownIds) {
-            const signature = unknownIds.join(',');
-            if (!signature || signature === this.apiRefetchedFor || this.apiRefetchTimer) return;
+        // 대화 데이터에 없는 질문이 기존 질문들 사이에 보이면(질문 수정으로 갈래가 바뀜 등) 다시 받는다.
+        // 맨 끝에 붙는 새 질문은 화면에서 읽은 것만으로 충분하므로 다시 받지 않는다 (요청 최소화).
+        scheduleRefetch() {
+            if (this.apiRefetchTimer || this.apiState !== 'done') return;
+            if (Date.now() < apiBlockedUntil || Date.now() - this.apiRefetchedAt < 60000) return;
             this.apiRefetchTimer = setTimeout(() => {
                 this.apiRefetchTimer = null;
-                this.apiRefetchedFor = signature;
+                this.apiRefetchedAt = Date.now();
+                dropApiCache(this.convKey);
                 this.fetchApi();
-            }, 4000);
+            }, 3000);
         }
 
         // ---------------- 갱신 ----------------
@@ -280,8 +354,13 @@
                 .filter(it => !apiIds.has(it.id) && it.pos !== null && it.pos !== undefined)
                 .sort((a, b) => a.pos - b.pos);
             extras.forEach(it => ordered.push(fromItem(it)));
-            const unknownLive = extras.filter(it => it.live).map(it => it.id);
-            if (unknownLive.length > 0) this.scheduleRefetch(unknownLive);
+            // 모르는 질문이 화면에 있는데 그보다 아래에 대화 데이터의 질문이 보이면 "끝에 추가"가 아니다
+            const unknownLive = extras.filter(it => it.live);
+            if (unknownLive.length > 0) {
+                const minUnknown = Math.min(...unknownLive.map(it => it.pos));
+                const knownBelow = ordered.some(o => o.live && o.weightStart !== null && o.pos > minUnknown);
+                if (knownBelow) this.scheduleRefetch();
+            }
             return ordered;
         }
 
@@ -300,7 +379,10 @@
             this.tooltipMain.className = 'witq-tooltip-main';
             this.tooltip.append(this.tooltipAttach, this.tooltipMain);
 
-            (document.body || document.documentElement).append(this.bar, this.tooltip);
+            this.toast = document.createElement('div');
+            this.toast.id = 'witq-toast';
+
+            (document.body || document.documentElement).append(this.bar, this.tooltip, this.toast);
         }
 
         render(container) {
@@ -316,7 +398,7 @@
             this.bar.style.display = 'block';
             this.bar.style.top = `${Math.max(0, rect.top)}px`;
             this.bar.style.height = `${Math.max(0, rect.height)}px`;
-            this.bar.style.right = `${Math.max(0, window.innerWidth - rect.right)}px`;
+            this.bar.style.right = `${Math.max(0, window.innerWidth - rect.right + W.dom.scrollbarWidth(container))}px`;
             const usable = Math.max(0, rect.height - 6);
 
             const keep = new Set();
@@ -455,73 +537,214 @@
         }
 
         // ---------------- 이동 ----------------
+        //
+        // 원칙
+        //   - 방향은 "지금 렌더된 질문들보다 목표가 위인지 아래인지"로만 정한다. 기억해둔 위치는 가상화/지연 로딩으로
+        //     금방 틀어지므로 어림값으로만 쓰고, 위아래로 지나치면 그 사이로 범위를 좁힌다(이분 탐색).
+        //   - 스크롤 전에 합성 휠 이벤트로 사이트의 "맨 아래 고정"을 푼다(ChatGPT).
+        //   - 맨 위에서 예전 대화를 불러와야 하면 실제로 불러와질 때까지(최대 6초) 기다리고, 실패 표시가 뜨면 멈춘다.
+        //   - 사용자가 직접 휠/터치/키 입력을 하면 즉시 중단(합성 이벤트는 무시).
+
+        turnSignature(container) {
+            const first = container.querySelector(site.turnSelector);
+            const top = first ? Math.round(first.getBoundingClientRect().top) : 0;
+            return `${Math.round(W.dom.scrollTop(container))}|${container.querySelectorAll(site.turnSelector).length}|${top}`;
+        }
+
+        waitForTurns(container, timeoutMs = 1000) {
+            return W.dom.waitForStable(() => this.turnSignature(container), 150, timeoutMs);
+        }
+
+        scrollContainerTo(container, top, behavior) {
+            const cur = W.dom.scrollTop(container);
+            W.dom.nudge(container, top < cur || top <= 0 ? -1 : 1);
+            W.dom.scrollTo(container, top, behavior);
+        }
+
+        // 화면에 없는 질문의 어림 위치(px, 여백 반영 전). 위쪽 아직 안 불러온 구간이면 null.
+        estimatePixel(idx, container) {
+            const { ordered, fractions, loadedStart, height } = this.layout;
+            const entry = ordered[idx];
+            const it = this.items.get(entry.id);
+            const live = [];
+            ordered.forEach((o, i) => {
+                if (!o.live) return;
+                const li = this.items.get(o.id);
+                // 대화 데이터에 없는 질문(방금 보낸 질문 등)은 분량 비율이 없어 기준으로 못 쓴다
+                if (li && li.pos !== null && li.pos !== undefined && o.weightStart !== null) {
+                    live.push({ i, pos: li.pos, w: o.weightStart });
+                }
+            });
+            // 대화 분량 비율이 있으면 가장 가까운 렌더된 질문 기준으로 거리 환산
+            if (entry.weightStart !== null && live.length > 0) {
+                const anchor = live.reduce((a, b) => (Math.abs(b.i - idx) < Math.abs(a.i - idx) ? b : a));
+                const pxPerWeight = Math.max(1, height) / Math.max(0.05, 1 - (loadedStart || 0));
+                const px = anchor.pos + (entry.weightStart - anchor.w) * pxPerWeight;
+                if (px < 0 && site.loadsOlderOnTop && loadedStart > 0) return null;
+                return Math.max(0, px);
+            }
+            if (it && it.pos !== null && it.pos !== undefined) return it.pos;
+            return W.layout.fractionToPixel(fractions[idx], this.layout);
+        }
+
+        showToast(text) {
+            if (!text) return;
+            this.toast.textContent = text;
+            const rect = W.dom.visibleRect(this.container || document.scrollingElement);
+            this.toast.style.top = `${Math.max(8, rect.top + 12)}px`;
+            this.toast.style.right = `${Math.max(24, window.innerWidth - rect.right + 24)}px`;
+            this.toast.classList.add('visible');
+            clearTimeout(this.toastTimer);
+            this.toastTimer = setTimeout(() => this.toast.classList.remove('visible'), 3500);
+        }
 
         async navigate(id) {
+            try {
+                return await this.navigateInner(id);
+            } catch (e) {
+                this.log('nav failed', e);
+                return false;
+            }
+        }
+
+        async navigateInner(id) {
             const token = ++this.navToken;
             const convKey = this.convKey;
             let interrupted = false;
-            const onInput = () => { interrupted = true; };
+            const onInput = (e) => { if (e.isTrusted) interrupted = true; };
             const inputEvents = ['wheel', 'touchstart', 'keydown'];
             const opts = { capture: true, passive: true };
             const valid = () => !this.destroyed && token === this.navToken && !interrupted && convKey === this.convKey;
+            const navStart = performance.now();
+            let deadline = navStart + NAV_TIMEOUT_MS;
 
             // 클릭 자체로 생기는 입력 이벤트는 무시하도록 다음 틱부터 감지
             setTimeout(() => inputEvents.forEach(t => window.addEventListener(t, onInput, opts)), 0);
             try {
-                let lastPx = null;
-                for (let attempt = 0; attempt < 15; attempt++) {
+                let lo = null;          // 목표가 이보다 아래였던 scrollTop
+                let hi = null;          // 목표가 이보다 위였던 scrollTop
+                let lastHeight = -1;
+                let aligns = 0;
+                let edgeWaits = 0;
+                let smoothUsed = false;
+
+                while (valid() && performance.now() < deadline) {
                     this.refreshNow();
                     const container = this.container;
                     if (!container) return false;
+                    const cur = W.dom.scrollTop(container);
+                    const view = W.dom.viewHeight(container);
+                    const maxTop = W.dom.maxScrollTop(container);
                     const it = this.items.get(id);
 
+                    // 1) 화면에 있음: 질문 윗변을 여백 위치에 맞춘다. 주변이 다시 그려지며 밀릴 수 있어 안정될 때까지 반복.
                     if (it && it.live && it.turnEl && it.turnEl.isConnected) {
-                        const pos = W.dom.positionIn(it.turnEl, container);
-                        const near = Math.abs(pos - container.scrollTop) < container.clientHeight * 2;
-                        const behavior = attempt === 0 && near ? 'smooth' : 'auto';
-                        W.dom.scrollTo(container, pos - site.scrollOffset, behavior);
-                        if (behavior === 'smooth') await W.dom.waitForScrollEnd(container);
-                        // 가상화 사이트는 이동 중/직후 주변이 다시 그려지며 위치가 밀릴 수 있어 최대 2번 보정
-                        for (let i = 0; i < 2; i++) {
-                            await W.dom.waitForSettle(150, 600);
-                            if (!valid() || !it.turnEl || !it.turnEl.isConnected) break;
-                            const again = W.dom.positionIn(it.turnEl, container) - site.scrollOffset;
-                            const maxTop = container.scrollHeight - container.clientHeight;
-                            const target = Math.min(Math.max(0, again), maxTop);
-                            if (Math.abs(target - container.scrollTop) <= 6) break;
-                            W.dom.scrollTo(container, target, 'auto');
+                        const want = Math.min(Math.max(0, W.dom.positionIn(it.turnEl, container) - site.scrollOffset), maxTop);
+                        if (Math.abs(want - cur) <= 4 || aligns >= 4) {
+                            this.flash(it.bubbleEl || it.turnEl);
+                            this.log('nav done', { id, aligns });
+                            return true;
                         }
-                        this.flash(it.bubbleEl || it.turnEl);
-                        this.log('nav done', { id, attempt });
-                        return true;
+                        aligns++;
+                        const smooth = !smoothUsed && Math.abs(want - cur) < view * 1.5;
+                        smoothUsed = true;
+                        this.scrollContainerTo(container, want, smooth ? 'smooth' : 'auto');
+                        if (smooth) await W.dom.waitForScrollEnd(container);
+                        await this.waitForTurns(container, 800);
+                        continue;
                     }
 
-                    // 화면에 없음: 어림 위치로 점프해서 렌더를 유도
-                    const { ordered, fractions } = this.layout;
+                    // 2) 화면에 없음: 렌더된 질문들과 비교해 방향을 정하고 그쪽으로 이동
+                    const { ordered } = this.layout;
                     const idx = ordered.findIndex(o => o.id === id);
                     if (idx < 0) return false;
-                    let px = (it && it.pos !== null && it.pos !== undefined)
-                        ? it.pos
-                        : W.layout.fractionToPixel(fractions[idx], this.layout);
-                    if (px === null) px = 0; // 아직 안 불러온 위쪽 → 맨 위로 가서 예전 대화를 불러오게 한다
-                    px -= site.scrollOffset;
-                    if (lastPx !== null && Math.abs(px - lastPx) < 5) {
-                        // 같은 자리만 맴돌면 목표 방향으로 한 화면씩 이동
-                        const liveIdx = ordered.map((o, i) => (o.live ? i : -1)).filter(i => i >= 0);
-                        const up = liveIdx.length > 0 && idx < liveIdx[0];
-                        px = container.scrollTop + (up ? -0.8 : 0.8) * container.clientHeight;
+                    const liveIdx = [];
+                    ordered.forEach((o, i) => { if (o.live) liveIdx.push(i); });
+                    let dir = 0;
+                    if (liveIdx.length > 0) {
+                        if (ordered[idx].weightStart === null && this.layout.ordered.some(o => o.weightStart !== null) &&
+                            it && it.pos !== null && it.pos !== undefined) {
+                            // 대화 데이터에 없는 질문은 목록 끝에 붙어 있어 순서로는 방향을 모른다 → 기억된 위치로 판단
+                            const livePos = liveIdx.map(i => this.items.get(ordered[i].id).pos);
+                            if (it.pos < Math.min(...livePos)) dir = -1;
+                            else if (it.pos > Math.max(...livePos)) dir = 1;
+                        } else if (idx < liveIdx[0]) dir = -1;
+                        else if (idx > liveIdx[liveIdx.length - 1]) dir = 1;
                     }
-                    lastPx = px;
-                    this.log('nav jump', { id, attempt, px: Math.round(px) });
-                    W.dom.scrollTo(container, px, 'auto');
-                    await W.dom.waitForSettle(180, 1000);
-                    if (!valid()) return false;
+
+                    // 위쪽 내용이 새로 불러와져 높이가 바뀌면 이전 범위는 의미가 없다
+                    const height = container.scrollHeight;
+                    if (lastHeight >= 0 && Math.abs(height - lastHeight) > view * 0.25) { lo = null; hi = null; }
+                    lastHeight = height;
+                    if (dir > 0) lo = lo === null ? cur : Math.max(lo, cur);
+                    if (dir < 0) hi = hi === null ? cur : Math.min(hi, cur);
+                    // 내용이 밀려 범위가 뒤집혔으면(아래 경계가 위 경계보다 아래) 새로 시작
+                    if (lo !== null && hi !== null && hi <= lo) {
+                        lo = dir > 0 ? cur : null;
+                        hi = dir < 0 ? cur : null;
+                    }
+
+                    // 맨 위/맨 아래에 이미 닿았는데 목표가 그 너머에 있는 경우
+                    if (dir < 0 && cur <= 2) {
+                        // 첫 질문까지 이미 불러왔으면 더 불러올 것이 없다 (없어진 갈래의 질문 등)
+                        if (!site.loadsOlderOnTop || this.sawFirstQuestion || edgeWaits >= 8) break;
+                        edgeWaits++;
+                        const result = await this.waitForOlder(container, valid);
+                        if (result === 'failed') {
+                            this.showToast(MSG('loadOlderFailed'));
+                            return false;
+                        }
+                        if (result === 'none') break;
+                        // 예전 대화가 계속 불러와지는 동안은 시간 제한을 늘려준다 (아주 긴 대화)
+                        deadline = Math.min(navStart + 45000, Math.max(deadline, performance.now() + 5000));
+                        continue;
+                    }
+                    if (dir > 0 && cur >= maxTop - 2) break;
+
+                    const estimate = this.estimatePixel(idx, container);
+                    const target = W.layout.nextScrollTarget({
+                        dir,
+                        estimate: estimate === null ? null : estimate - site.scrollOffset,
+                        current: cur, view, maxTop, lo, hi
+                    });
+                    this.log('nav step', { id, dir, cur: Math.round(cur), target: Math.round(target), lo, hi });
+                    if (Math.abs(target - cur) < 2) {
+                        if (dir === 0) break;
+                        // 범위가 다 좁혀졌는데도 안 보이면 렌더를 한 번 더 기다려 본다
+                        await this.waitForTurns(container, 600);
+                        if (lo !== null && hi !== null && hi - lo < 4) break;
+                        continue;
+                    }
+                    this.scrollContainerTo(container, target, 'auto');
+                    await this.waitForTurns(container, 1000);
                 }
                 this.log('nav give-up', { id });
                 return false;
             } finally {
                 setTimeout(() => inputEvents.forEach(t => window.removeEventListener(t, onInput, opts)), 0);
             }
+        }
+
+        // 맨 위에서 사이트가 예전 대화를 불러올 때까지 기다린다. 'loaded' | 'failed' | 'none'
+        async waitForOlder(container, valid) {
+            const sigOf = () => {
+                const first = container.querySelector(site.turnSelector);
+                return `${container.scrollHeight}|${first ? (first.getAttribute('data-turn-key') || first.id || first.textContent.slice(0, 40)) : ''}`;
+            };
+            const before = sigOf();
+            // 사이트가 "맨 위에 닿음"을 알아채도록 휠 신호와 함께 다시 맨 위로
+            this.scrollContainerTo(container, 0, 'auto');
+            const start = performance.now();
+            while (performance.now() - start < 6000) {
+                await W.dom.sleep(120);
+                if (!valid()) return 'none';
+                if (site.loadFailed(container)) return 'failed';
+                if (sigOf() !== before) {
+                    await this.waitForTurns(container, 1000);
+                    return 'loaded';
+                }
+            }
+            return site.loadFailed(container) ? 'failed' : 'none';
         }
 
         // ---------------- 즐겨찾기 ----------------
@@ -553,7 +776,8 @@
         maybeMigrateFavorites(ordered) {
             if (this.migratedConv === this.convKey || ordered.length === 0) return;
             if (this.apiState !== 'done') return;
-            this.migratedConv = this.convKey;
+            // 전체 목록(대화 데이터)이 있을 때만 "이번 대화는 끝"으로 표시. 화면에서 읽은 일부뿐이면 계속 시도
+            if (this.apiList) this.migratedConv = this.convKey;
             const ids = new Set(ordered.map(o => o.id));
             let changed = false;
             const next = this.favorites.map(f => {
@@ -647,8 +871,10 @@
             this.destroyed = true;
             this.navToken++;
             clearTimeout(this.refreshTimer);
+            clearTimeout(this.apiTimer);
             clearTimeout(this.apiRefetchTimer);
             clearTimeout(this.tooltipHideTimer);
+            clearTimeout(this.toastTimer);
             clearInterval(this.urlTimer);
             if (this.observer) this.observer.disconnect();
             window.removeEventListener('witq:teardown', this.onTeardown);
@@ -659,6 +885,7 @@
             try { if (this.onStorage) chrome.storage.onChanged.removeListener(this.onStorage); } catch (e) {}
             if (this.bar) this.bar.remove();
             if (this.tooltip) this.tooltip.remove();
+            if (this.toast) this.toast.remove();
             document.querySelectorAll('.witq-star').forEach(el => el.remove());
             if (window.__witq === this) delete window.__witq;
         }
